@@ -1,6 +1,6 @@
 # P0: Foundations, the implementation plan
 
-Part of [PLAN.md](../PLAN.md) §5. **Status (2026-11-13):** steps 1–4 done. The bootstrap is applied (10 resources) and the state is in S3. Cost anomaly detection is waiting for Cost Explorer. Still to do: first push, the GitHub `aws` environment, and the OIDC check run.
+Part of [PLAN.md](../PLAN.md) §5. **Status (2026-11-13): done.** The bootstrap is applied and the state is in S3. The OIDC check is green. Waiting on AWS: Cost Explorer (then set `enable_anomaly_detection = true`) and the GPU appeal.
 
 **Goal:** a safe AWS account and a connected repo, before we build anything that costs real money.
 
@@ -12,7 +12,7 @@ Part of [PLAN.md](../PLAN.md) §5. **Status (2026-11-13):** steps 1–4 done. Th
 
 | # | Thing | Where | Why it matters |
 | --- | --- | --- | --- |
-| 1 | **Local git repo**, connected to `github.com/JaspalSingh1759/llm-inference-platform` | This folder | Argo CD (P3) and GitHub Actions (P6) work from this repo |
+| 1 | **Local git repo**, connected to `github.com/JaspalSingh1759/llm-inference-platform` | This folder | Argo CD (P4) and GitHub Actions (P7) work from this repo |
 | 2 | **Terraform state bucket** (S3) | AWS us-east-1 | Terraform's memory of what it built. Without it, Terraform can't update or destroy safely |
 | 3 | **Budget alarm**: $50/month; emails at $20 actual, $50 actual, and $50 forecast | AWS Budgets | A forgotten GPU node or a leaked key can't silently run up a bill |
 | 4 | **Cost anomaly detection** | AWS Cost Explorer | Emails when spending looks unusual, even below the budget |
@@ -33,7 +33,7 @@ Alerts go to **jaspalsingh1759@gmail.com**.
 | **Bootstrap** | The chicken-and-egg step: Terraform needs a bucket for its state, but the bucket is created *by* Terraform. So the first apply stores state locally, then we move it into the new bucket (`terraform init -migrate-state`) |
 | **OIDC (OpenID Connect)** | GitHub signs a short-lived token saying "this is workflow X in repo Y on branch Z". AWS checks the signature and hands back temporary credentials (valid about 1 hour). No secret is stored in GitHub |
 | **Trust policy** | The part of an IAM role that says *who* may use it. Ours allows only this repo, and only from the `main` branch or the approved `aws` environment |
-| **Least privilege** | Give only the permissions needed. P0 gives the CI role admin rights, to keep things simple; P10 narrows it. Say this honestly in interviews |
+| **Least privilege** | Give only the permissions needed. P0 gives the CI role admin rights, to keep things simple; P11 narrows it. Say this honestly in interviews |
 
 ---
 
@@ -48,7 +48,7 @@ llm-inference-platform/
     ├── state_bucket.tf                 S3 bucket: versioning, encryption, public access blocked, TLS-only, prevent_destroy
     ├── budget.tf                       monthly budget + 3 email alerts; cost anomaly monitor + subscription
     ├── github_oidc.tf                  OIDC provider + role + trust policy
-    ├── outputs.tf                      bucket name, role ARN (needed in P3 and P6)
+    ├── outputs.tf                      bucket name, role ARN (needed in P4 and P7)
     └── backend.tf                      added after the first apply: points state at the new bucket
 .github/workflows/
 └── aws-oidc-check.yml                  manual trigger; assumes the role and prints the identity
@@ -85,8 +85,8 @@ llm-inference-platform/
 
 - [x] `terraform plan` in `infra/bootstrap` says **"No changes"**, using state from S3.
 - [x] The budget shows in **Billing → Budgets** with 3 alerts to your email.
-- [ ] The **aws-oidc-check** workflow run is green and prints `assumed-role/github-actions-llm-platform/...`.
-- [ ] No AWS key exists anywhere in the repo or in GitHub secrets.
+- [x] The **aws-oidc-check** workflow run is green and prints `assumed-role/github-actions-llm-platform/...`.
+- [x] No AWS key exists anywhere in the repo or in GitHub secrets.
 
 ---
 
@@ -103,4 +103,14 @@ llm-inference-platform/
 
 ## Before we start: one open check
 
-**Account plan:** in the console, open **Billing and Cost Management** and check whether the account is on the **Free plan**. If it is, upgrade to the **Paid plan** before P3 (EKS and GPUs). P0 itself works on either plan.
+**Account plan:** in the console, open **Billing and Cost Management** and check whether the account is on the **Free plan**. If it is, upgrade to the **Paid plan** before P4 (EKS and GPUs). P0 itself works on either plan.
+
+---
+
+## What happened (for the interview)
+
+**The OIDC check failed at first** with `Not authorized to perform sts:AssumeRoleWithWebIdentity`.
+- **How we found the cause:** CloudTrail recorded the refused call. The identity GitHub sent was `repo:JaspalSingh1759@59330899/llm-inference-platform@1456772034:environment:aws`. GitHub's `sub` claim for this repo includes the **owner ID and repo ID**, but our trust policy expected the name-only format `repo:JaspalSingh1759/llm-inference-platform:...`.
+- **The fix:** pin the trust policy to the ID-based subject. We didn't loosen it with a wildcard.
+- **Why the fix is safer:** with the IDs in the subject, a deleted-and-recreated repo with the same name can't use the role.
+- **Lesson:** when federation fails, read the claim the identity provider actually sent (CloudTrail shows it) before touching the policy.

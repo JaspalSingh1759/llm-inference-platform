@@ -1,0 +1,5 @@
+apiVersion: v2
+name: service
+description: One standard chart for every service on the platform (assistant, classifier, llm). Each service only supplies a values file.
+type: application
+version: 0.1.0

@@ -1,0 +1,97 @@
+{
+  "model": "dispute-classifier",
+  "created": "2026-11-12T01:59:22+00:00",
+  "dataset": {
+    "name": "maple-bank-dispute-claims",
+    "version": "46d9cc0f8831"
+  },
+  "code_commit": "7327022-dirty",
+  "settings": {
+    "features": "words",
+    "C": 1.0
+  },
+  "labels": [
+    "duplicate_charge",
+    "incorrect_amount",
+    "credit_not_processed",
+    "cancelled_recurring",
+    "not_received",
+    "unauthorised"
+  ],
+  "input": {
+    "type": "list of strings",
+    "example": [
+      "I was charged twice at BestElectro for $49.99."
+    ]
+  },
+  "output": {
+    "type": "list of labels",
+    "example": [
+      "duplicate_charge"
+    ]
+  },
+  "scores": {
+    "validation_macro_f1": 0.9846518947115043,
+    "test": {
+      "accuracy": 0.9803695150115473,
+      "macro_f1": 0.9803674445627296,
+      "macro_f1_per_language": {
+        "en": 0.9798258575669171,
+        "fr": 0.9818775781668924
+      },
+      "per_label": {
+        "duplicate_charge": {
+          "precision": 0.9738562091503268,
+          "recall": 0.9738562091503268,
+          "f1-score": 0.9738562091503268,
+          "support": 153.0
+        },
+        "incorrect_amount": {
+          "precision": 1.0,
+          "recall": 0.9864864864864865,
+          "f1-score": 0.9931972789115646,
+          "support": 148.0
+        },
+        "credit_not_processed": {
+          "precision": 0.9865771812080537,
+          "recall": 0.98,
+          "f1-score": 0.9832775919732442,
+          "support": 150.0
+        },
+        "cancelled_recurring": {
+          "precision": 0.991304347826087,
+          "recall": 0.9661016949152542,
+          "f1-score": 0.9785407725321889,
+          "support": 118.0
+        },
+        "not_received": {
+          "precision": 0.9733333333333334,
+          "recall": 0.9798657718120806,
+          "f1-score": 0.9765886287625418,
+          "support": 149.0
+        },
+        "unauthorised": {
+          "precision": 0.9607843137254902,
+          "recall": 0.9932432432432432,
+          "f1-score": 0.9767441860465116,
+          "support": 148.0
+        }
+      }
+    }
+  },
+  "gate": {
+    "thresholds": {
+      "macro_f1": 0.9,
+      "macro_f1_per_language": 0.85,
+      "recall_per_label": 0.8
+    },
+    "passed": true,
+    "failures": []
+  },
+  "environment": {
+    "python": "3.11.9",
+    "scikit-learn": "1.6.1",
+    "joblib": "1.4.2"
+  },
+  "file_sha256": "5b4ced706231cfa31ba048ed14144489ac326face679a49e3ffe53d03ee34b20"
+}

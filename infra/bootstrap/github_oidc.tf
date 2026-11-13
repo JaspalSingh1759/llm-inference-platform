@@ -47,7 +47,7 @@ resource "aws_iam_role" "github_actions" {
   max_session_duration = 3600
 }
 
-# Admin for now, to keep P0-P9 simple. P10 replaces this with least-privilege policies.
+# Admin for now, to keep P0-P10 simple. P11 replaces this with least-privilege policies.
 resource "aws_iam_role_policy_attachment" "github_actions_admin" {
   role       = aws_iam_role.github_actions.name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"

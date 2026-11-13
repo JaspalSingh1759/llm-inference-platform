@@ -1,0 +1,36 @@
+# Defaults for any service. Each service's values file overrides what it needs.
+name: ""                      # also the Service's DNS name inside the namespace
+replicas: 1
+image:
+  repository: ""
+  tag: dev
+  pullPolicy: IfNotPresent    # locally built images are loaded into kind, never pulled
+args: []
+env: {}
+port: 8000
+
+service:
+  type: ClusterIP
+  nodePort: null              # only for type NodePort (local access through kind)
+
+probes:
+  liveness: /healthz
+  readiness: /readyz
+  # startup: give slow starters (like an LLM loading weights) time before liveness kicks in
+  startupFailureThreshold: 30 # x periodSeconds (5s) = 150s maximum start time
+  periodSeconds: 5
+
+resources:
+  requests: {cpu: 100m, memory: 128Mi}
+  limits: {memory: 256Mi}     # no CPU limit by default: CPU limits cause throttling; memory limits prevent node starvation
+
+# Least privilege by default.
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+extraVolumes: []
+extraVolumeMounts: []

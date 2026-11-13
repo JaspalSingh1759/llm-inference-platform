@@ -117,7 +117,7 @@ s.box(990, 95, 240, 90, "Amazon Bedrock", ["fallback model", "(when our LLM is d
 s.arrow([(940, 125), (988, 125)], dashed=True, label="fallback", label_at=(964, 117), label_color=MUTED)
 # Serving row
 s.group(250, 215, 520, 170, "KServe (model serving)")
-s.box(270, 250, 230, 110, "Classifier", ["InferenceService · CPU", "scikit-learn (from B2)", "→ dispute type"], "green")
+s.box(270, 250, 230, 110, "Classifier", ["InferenceService · CPU", "scikit-learn, retrained", "by the training pipeline"], "green")
 s.box(520, 250, 230, 110, "LLM", ["InferenceService", "now: llama.cpp on CPU", "later: vLLM on GPU"], "green", bold_border=True)
 s.arrow([(330, 185), (330, 248)], label="1 classify", label_at=(370, 212), label_color=MUTED)
 s.arrow([(835, 185), (835, 220), (690, 220), (690, 248)], label="2 generate", label_at=(870, 212), label_color=MUTED)
@@ -149,22 +149,64 @@ s.save("architecture.svg")
 
 
 # 2. Phases ---------------------------------------------------------------------------------------
-s = Svg(1240, 480, "Thirteen phases, four milestones", "Each phase ends with something working and one interview story. Thick border = next")
+s = Svg(1240, 480, "Fourteen phases, four milestones", "Each phase ends with something working and one interview story. Thick border = next")
 steps = [
-    {"title": "P0 Foundations", "lines": ["budget, OIDC, GPU quota"], "color": "blue", "bold": True},
-    {"title": "P1 Local LLM", "lines": ["kind + Ollama + app"], "color": "blue"},
-    {"title": "P2 Eval + traces", "lines": ["golden set, gate, OTel"], "color": "blue"},
-    {"title": "P3 Terraform", "lines": ["VPC, EKS, node groups"], "color": "purple"},
-    {"title": "P4 LLM serving", "lines": ["KServe · CPU → GPU"], "color": "purple"},
-    {"title": "P5 Gateway", "lines": ["LiteLLM, guardrails"], "color": "purple"},
-    {"title": "P6 CI/CD", "lines": ["eval gate → GitOps"], "color": "green"},
-    {"title": "P7 Observe", "lines": ["TTFT, GPU, tokens"], "color": "green"},
-    {"title": "P8 Scale + cost", "lines": ["KEDA, Karpenter, k6"], "color": "green"},
-    {"title": "P9 Rollouts", "lines": ["canary, online eval"], "color": "amber"},
-    {"title": "P10 Security", "lines": ["IAM, policies, PII"], "color": "amber"},
-    {"title": "P11 Incidents", "lines": ["7 drills, runbooks"], "color": "amber"},
+    {"title": "P0 Foundations", "lines": ["budget, OIDC, quota"], "color": "blue"},
+    {"title": "P1 Local LLM", "lines": ["kind + llama.cpp + app"], "color": "blue"},
+    {"title": "P2 Training", "lines": ["Argo, MLflow, gate"], "color": "blue", "bold": True},
+    {"title": "P3 Eval + traces", "lines": ["golden set, gate, OTel"], "color": "blue"},
+    {"title": "P4 Terraform", "lines": ["VPC, EKS, node groups"], "color": "purple"},
+    {"title": "P5 LLM serving", "lines": ["KServe · CPU → GPU"], "color": "purple"},
+    {"title": "P6 Gateway", "lines": ["LiteLLM, guardrails"], "color": "purple"},
+    {"title": "P7 CI/CD", "lines": ["eval gate → GitOps"], "color": "green"},
+    {"title": "P8 Observe", "lines": ["TTFT, GPU, tokens"], "color": "green"},
+    {"title": "P9 Scale + cost", "lines": ["KEDA, Karpenter, k6"], "color": "green"},
+    {"title": "P10 Rollouts", "lines": ["canary, online eval"], "color": "amber"},
+    {"title": "P11 Security", "lines": ["IAM, policies, PII"], "color": "amber"},
+    {"title": "P12 Incidents", "lines": ["7 drills, runbooks"], "color": "amber"},
 ]
-snake(s, steps, 90, 290, w=172, h=78, gap=34, x0=24, per_row=6)
+snake(s, steps, 90, 290, w=150, h=78, gap=22, x0=24, per_row=7)
 s.legend(30, 420, [("blue", "M1: works on a laptop (free)"), ("purple", "M2: LLM inference on EKS"), ("green", "M3: automated + observable"), ("amber", "M4: production-grade")])
-s.text(1216, 462, "Optional P12: the same LLM on a SageMaker endpoint, to compare", size=12, color=MUTED, anchor="end")
+s.text(1216, 462, "Optional P13: the same LLM on a SageMaker endpoint, to compare", size=12, color=MUTED, anchor="end")
 s.save("phases.svg")
+
+
+# 3. P2 training pipeline -------------------------------------------------------------------------
+s = Svg(1240, 690, "P2 training pipeline: raw data in, a served model version out",
+        "Each step is a pod in an Argo Workflow. A failed step stops the run, and production keeps its current model")
+s.box(24, 115, 170, 100, "Raw data drop", ["MinIO (S3 later)", "raw/claims-<month>.csv", "from the data team"], "teal")
+s.box(24, 250, 170, 90, "Trigger", ["now: argo submit", "later: new raw file,", "drift alert, or cron"], "gray", dashed=True)
+s.arrow([(194, 165), (232, 165)])
+s.group(214, 80, 1002, 260, "Argo Workflow \"train-classifier\": one pod per step, all from the trainer image")
+steps = [("0 Prepare", ["raw CSV → clean,", "dedupe, split, version"], "teal"),
+         ("1 Validate", ["schema, leakage,", "classes, file hashes"], "amber"),
+         ("2 Train + gate", ["scikit-learn vs PyTorch,", "best on val, thresholds"], "amber"),
+         ("3 Compare", ["challenger vs", "champion, same data"], "amber"),
+         ("4 Publish", ["model + metadata", "(sha256) → store"], "purple")]
+stops = [("stop: unreadable", "bad file / columns"), ("stop: bad data", "nothing is trained"),
+         ("stop: gate failed", "saved, not registered"), ("stop: not better", "prod model unchanged")]
+W, STEP = 176, 196
+for i, (title, lines, color) in enumerate(steps):
+    x = 234 + i * STEP
+    s.box(x, 115, W, 100, title, lines, color, bold_border=(color == "amber"))
+    if i < 4:
+        s.arrow([(x + W, 165), (x + STEP - 2, 165)])
+        s.arrow([(x + 50, 215), (x + 50, 248)], color=C["red"][1], dashed=True)
+        s.box(x, 250, 150, 62, stops[i][0], [stops[i][1]], "red", dashed=True, title_size=13)
+s.box(560, 390, 440, 95, "MLflow: tracking + registry",
+      ["every run and candidate: params, scores, dataset, commit", "aliases challenger / champion · PostgreSQL database"], "blue")
+tx, cx = 234 + 2 * STEP + 163, 234 + 3 * STEP + 163
+s.arrow([(tx, 215), (tx, 388)], dashed=True, label="register challenger", label_at=(tx - 54, 368), label_color=MUTED)
+s.arrow([(cx, 215), (cx, 388)], dashed=True, label="promote champion", label_at=(cx - 54, 368), label_color=MUTED)
+px = 234 + 4 * STEP + W // 2
+s.box(1030, 390, 186, 95, "Model store", ["MinIO (S3 later)", "models/dispute-", "classifier/v<N>/"], "blue")
+s.arrow([(px, 215), (px, 388)])
+s.box(1010, 535, 206, 90, "GitOps commit", ["classifier model", "version = v<N> (PR)"], "purple")
+s.arrow([(px, 485), (px, 533)])
+s.box(530, 535, 360, 90, "Classifier pod (serving)",
+      ["init container downloads v<N> from the store;", "server checks sha256 + framework, then serves"], "green", bold_border=True)
+s.arrow([(1010, 580), (892, 580)], label="Helm / Argo CD", label_at=(950, 570), label_color=MUTED)
+s.box(230, 535, 250, 90, "Assistant", ["POST /assist gets dispute", "types from the new model"], "amber")
+s.arrow([(530, 580), (482, 580)])
+s.legend(30, 668, [("amber", "Gates (a pod that can stop the run)"), ("teal", "Data in + data processing"), ("blue", "Storage + registry"), ("red", "Where a bad run stops")])
+s.save("training-pipeline.svg")

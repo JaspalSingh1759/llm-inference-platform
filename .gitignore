@@ -13,3 +13,6 @@ __pycache__/
 # Secrets never go in Git
 .env
 *.pem
+
+# Rendered from local/kind-config.yaml.tpl (contains an absolute local path)
+local/kind-config.yaml

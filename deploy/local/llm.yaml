@@ -1,0 +1,42 @@
+# llama.cpp server with Qwen2.5-0.5B-Instruct (4-bit GGUF) on CPU. Plan B: the same image runs on EKS in P4.
+name: llm
+image:
+  repository: ghcr.io/ggml-org/llama.cpp
+  tag: server
+port: 8080
+args:
+  - --model
+  - /models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+  - --alias
+  - qwen2.5-0.5b-instruct     # the model name clients send and see
+  - --host
+  - 0.0.0.0
+  - --port
+  - "8080"
+  - --ctx-size
+  - "4096"                    # max tokens per request context (prompt + reply)
+  - --parallel
+  - "2"                       # requests served at the same time (each gets ctx-size / parallel)
+  - --threads
+  - "2"
+  - --metrics                 # Prometheus metrics at /metrics (used in P7)
+probes:
+  liveness: /health
+  readiness: /health          # 503 while the model is loading, 200 when ready
+resources:
+  requests: {cpu: "2", memory: 1Gi}
+  limits: {memory: 2Gi}
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+# The model file is downloaded once to local/models/ and mounted into the kind node at /models.
+extraVolumes:
+  - name: models
+    hostPath: {path: /models, type: Directory}
+extraVolumeMounts:
+  - name: models
+    mountPath: /models
+    readOnly: true

@@ -4,14 +4,14 @@ Written 2026-11-12. This is a new, standalone project. It replaces the earlier A
 
 > **Plan B is active (2026-11-13).** AWS refused the GPU quota (normal for new accounts). An appeal asking for 4 vCPUs has been reopened. Until a GPU is approved, **the LLM runs on CPU nodes**. Everything else in this plan stays the same. See §2a.
 
-**One sentence:** we build a platform on AWS Kubernetes (EKS) that serves an open-source LLM on a GPU and a classic ML model on CPU, behind a gateway with guardrails. It is shipped by an evaluation-gated CI/CD pipeline and watched by metrics, traces and alerts.
+**One sentence:** we build a platform on AWS Kubernetes (EKS) that serves an open-source LLM on a GPU and a classic ML model on CPU, behind a gateway with guardrails, plus a **training pipeline** that retrains the classic model in pods and hands each new version to serving. It is shipped by an evaluation-gated CI/CD pipeline and watched by metrics, traces and alerts.
 
 **Who this is for:** two kinds of job at once.
 
 | Job type | Examples (Toronto, 2026) | What they ask for | Where this project covers it |
 | --- | --- | --- | --- |
-| **MLOps / inference platform** | Autodesk Senior MLOps Developer (Inference); "AI Platform Engineer" | Kubernetes, inference on pods, Terraform, CI/CD, monitoring, security, incidents | P3, P4, P6–P11 |
-| **LLMOps / AgentOps / DevOps for AI** | RBC AI Platform roles; "LLMOps Engineer"; "Senior DevOps Engineer, AI Platform"; "Agent & DevOps Platform Engineer" | LLM serving, evaluation, tracing, guardrails, gateway, token cost, GPU | P1, P2, P4, P5, P7–P9 |
+| **MLOps / inference platform** | Autodesk Senior MLOps Developer (Inference); "AI Platform Engineer" | Kubernetes, inference on pods, training infrastructure, Terraform, CI/CD, monitoring, security, incidents | P2, P4, P5, P7–P12 |
+| **LLMOps / AgentOps / DevOps for AI** | RBC AI Platform roles; "LLMOps Engineer"; "Senior DevOps Engineer, AI Platform"; "Agent & DevOps Platform Engineer" | LLM serving, evaluation, tracing, guardrails, gateway, token cost, GPU | P1, P3, P5, P6, P8–P10 |
 
 ---
 
@@ -33,7 +33,7 @@ Written 2026-11-12. This is a new, standalone project. It replaces the earlier A
 | Chaining models (a "compound AI system") | Classifier → policy → LLM |
 | Is the answer *correct*, not just fast? | Evaluation gate + tracing |
 | Cost per request | Tokens, GPU hours, cost per 1M tokens |
-| Safety and privacy | Guardrails, PII masking, data residency (explained, see P10) |
+| Safety and privacy | Guardrails, PII masking, data residency (explained, see P11) |
 | What if the GPU fails? | Gateway falls back to Amazon Bedrock |
 
 **Key words used everywhere below:**
@@ -71,6 +71,12 @@ Written 2026-11-12. This is a new, standalone project. It replaces the earlier A
 3. A Git commit updates the version.
 4. Argo CD deploys it as a **canary**: 10% of traffic, checked on latency, errors and an online quality score, then 100%.
 5. Bad answers found in production become new golden-set cases.
+
+**Journey 3: new training data.** The data team drops a new raw export in S3, or the drift alert (P8) says the live claims no longer look like the training data.
+1. A training pipeline (Argo Workflows) runs each step as a pod: **prepare the raw drop → validate the data → train (scikit-learn and PyTorch candidates) → gate → compare with the production model → register in MLflow**.
+2. Any failed step stops the pipeline; production keeps its current model.
+3. A new champion is published as `model.joblib` + `metadata.json` (with checksum) to the model store.
+4. A Git commit bumps the classifier's model version; Argo CD rolls it out; the classifier pod verifies the checksum before serving.
 
 ---
 
@@ -128,14 +134,14 @@ That's a realistic platform-team situation: capacity is never there when you wan
 **Quota follow-up:**
 - An appeal for 4 vCPUs (G and VT on-demand, us-east-1) has been reopened.
 - If it's refused again: ask again 2–4 weeks after the first paid invoice.
-- If we need more than 8 normal vCPUs (e.g. scaling tests in P8), we request 16. Normal quotas are approved much more easily than GPU ones.
+- If we need more than 8 normal vCPUs (e.g. scaling tests in P9), we request 16. Normal quotas are approved much more easily than GPU ones.
 
 ---
 
 ## 3. Cost and safety rules
 
 - **Budget alarm first** (P0): email at $20 and $50.
-- **Most work is free:** P1, P2 and much of P5–P6 run on your laptop.
+- **Most work is free:** P1–P3 and much of P6–P7 run on your laptop.
 - **On AWS, destroy after every session** with `terraform destroy`.
 - **Rough cost while running** (estimates; we check current prices in P0):
 
@@ -160,16 +166,18 @@ llm-inference-platform/
 ├── docs/                 PLAN.md, phase notes, diagrams/
 ├── app/                  P1  Assistant API (FastAPI): guardrails, prompt, calls classifier + gateway
 │   └── prompts/              versioned prompt files (prompt changes go through the eval gate)
-├── models/classifier/    P1  the B2 scikit-learn model + metadata (copied from the starter-pack repo)
-├── evals/                P2  golden set (claims + expected type + must-mention facts) and eval runner
+├── models/classifier/    P1  the classifier's serving code (from P2 on, its weights come from the training pipeline)
+├── training/             P2  trainer image (validate, train, register, publish), Argo WorkflowTemplate,
+│                             local MinIO (S3 stand-in) + MLflow
+├── evals/                P3  golden set (claims + expected type + must-mention facts) and eval runner
 ├── local/                P1  kind cluster config, Ollama, Phoenix: the free laptop stack
-├── infra/                P0, P3  Terraform
+├── infra/                P0, P4  Terraform
 │   ├── bootstrap/            budget, state bucket, GitHub OIDC role
 │   └── platform/             VPC, EKS, CPU + GPU node groups, ECR, S3, IAM, Argo CD
-├── deploy/               P4–P9  Helm charts and values per environment; KServe InferenceServices;
+├── deploy/               P5–P10  Helm charts and values per environment; KServe InferenceServices;
 │                             gateway config; monitoring dashboards and alerts; Argo CD apps
-├── loadtest/             P8  k6 scripts + results
-├── runbooks/             P11 one page per incident + a postmortem
+├── loadtest/             P9  k6 scripts + results
+├── runbooks/             P12 one page per incident + a postmortem
 └── .github/workflows/        app, evals, infra pipelines
 ```
 
@@ -221,7 +229,25 @@ A phase is one or two 2–3-hour sessions.
 - **Interview story:** "The app talks to an OpenAI-compatible endpoint, so the same code runs against Ollama on my laptop, vLLM on a GPU, or a managed API. Only the URL changes."
 - **Jobs:** LLMOps, AgentOps.
 
-#### P2: Evaluation and tracing
+#### P2: Training pipeline (retrain → gate → serve)
+- **Detailed plan:** [phases/p2-training-pipeline.md](phases/p2-training-pipeline.md)
+- **Goal:** the *training* half of an ML platform. New data goes in; a validated, versioned model comes out and reaches the serving pod with no manual steps in between.
+- **Build (on kind, $0):**
+  - **MinIO** as a local S3 (buckets for raw drops, datasets and models), and an **MLflow** server (tracking + registry) with a **PostgreSQL** database and its files in MinIO.
+  - A **trainer image** with the B2 code: `validate.py`, `train.py`, MLflow tracking, champion/challenger promotion. Pinned library versions, the same as the serving image.
+  - A **prepare** step (data processing): a raw CSV export → cleaned, deduplicated, split into train/val/test, with a versioned manifest.
+  - **Two model families compete:** scikit-learn (TF-IDF + logistic regression, from B2) and a small **PyTorch** text classifier, both on CPU. The better one on validation goes on to the gate. This shows the pipeline doesn't care which framework a team uses.
+  - An **Argo Workflows** `WorkflowTemplate`: prepare → validate → train + gate → compare with the champion → publish. Each step is a pod; a failed step stops the run. Parameterised (raw file, model name), so another team could reuse it.
+  - The **classifier pod loads its weights from the model store** (init container) instead of having them baked into the image. The model version is a Helm value, so a new model ships the same way as a new image tag.
+  - Drills: a broken dataset is stopped at validation; a worse model is trained but not promoted.
+- **Later, on EKS:** the same workflow with S3 instead of MinIO, Pod Identity instead of keys, and training pods on spot nodes that scale to zero (P5). A new dataset in S3 triggers it (P7).
+- **Optional, after GPU approval:** a LoRA fine-tune of Qwen as a GPU Job, with checkpoints in S3 so a spot interruption resumes instead of restarting.
+- **New words:** Kubernetes Job, Argo Workflows, WorkflowTemplate, data preparation (ETL), artifact store, model registry, champion/challenger, PyTorch, init container, retraining trigger.
+- **Done when:** one `argo submit` turns a raw export into a registered, published model version, with both model families visible in MLflow; the classifier serves it after a values bump; the broken-data and worse-model drills both stop where they should.
+- **Interview story:** "Training runs as a pipeline of pods: raw data is prepared and versioned, validation fails fast, scikit-learn and PyTorch candidates compete, the candidate must pass absolute thresholds and beat the production model, and only then is it registered and published with a checksum. Serving pulls an exact version, so every prediction traces back to a dataset and a commit."
+- **Jobs:** Autodesk ("infrastructure for model training"), MLOps, AI platform.
+
+#### P3: Evaluation and tracing
 - **Goal:** measure answer *quality*, and see inside every request.
 - **Build:**
   - A **golden set** of about 60 claims. Each has an expected dispute type, facts the reply must mention, and things it must never do (e.g. promise a refund, repeat a card number).
@@ -235,35 +261,38 @@ A phase is one or two 2–3-hour sessions.
 
 ### Milestone 2: LLM inference on EKS (CPU now, GPU after quota approval)
 
-#### P3: The platform in Terraform
+#### P4: The platform in Terraform
 - **Goal:** one `terraform apply` builds the AWS side; one `destroy` removes it.
 - **Build:**
   - VPC;
   - EKS with a **system node group** (2× t3.large) and an **LLM node group**: c7i.large spot, 1–2 nodes, with a *taint* so only LLM pods land there. Plan B. A **GPU node group** (spot g4dn, min 0) is in the code behind `gpu_enabled = false`;
   - ECR;
-  - S3 bucket for model weights (versioned, KMS);
-  - Pod Identity roles;
+  - S3 buckets for model weights and for training data (versioned, KMS);
+  - Pod Identity roles (LLM pods read weights; training pods read datasets and write models);
+  - **RDS PostgreSQL** (smallest instance) as MLflow's database, in private subnets, encrypted;
   - Argo CD installed by Terraform.
 - **New words:** node group, taint/toleration, spot instance, EKS accelerated AMI, Terraform module.
 - **Done when:** the cluster is up, and a test pod with the LLM toleration lands only on the LLM node group. After GPU approval: a GPU pod runs `nvidia-smi` and the GPU node scales back to 0 afterwards.
 - **Interview story:** "GPU nodes are tainted and scale from zero, so we only pay for a GPU while a model needs one."
 - **Jobs:** MLOps inference (Autodesk), AI platform.
 
-#### P4: Serving the models with KServe
+#### P5: Serving the models with KServe
 - **Goal:** both models served on Kubernetes the way a platform team would do it.
 - **Build:**
   - Install KServe.
-  - Classifier `InferenceService` on CPU.
+  - Classifier `InferenceService` on CPU, loading the champion version from the S3 model store.
+  - The P2 training pipeline moved to EKS: Argo Workflows, S3 instead of MinIO, training pods on spot nodes that scale to zero, MLflow on RDS with its artifacts in S3.
+  - **A platform for many teams, not one app:** a namespace per team (`team-disputes`, plus a second example team) with a **ResourceQuota** (CPU, memory, GPU caps), and **PriorityClasses** so serving pods win over training pods when the cluster is full (training is retried; customers aren't kept waiting). The training WorkflowTemplate is shared, so a team submits a run with its own parameters instead of building its own pipeline.
   - LLM `InferenceService`. **Plan B:** llama.cpp server with Qwen2.5-0.5B (4-bit GGUF) on the LLM CPU nodes. **After GPU approval:** vLLM with Qwen2.5-1.5B on the GPU node; the T4 doesn't support bfloat16, so we set `dtype=half`.
   - Model weights pre-staged in S3 and cached on a volume, which cuts **cold start** (time from "pod scheduled" to "ready to answer").
   - (After GPU approval) the NVIDIA device plugin and the **DCGM exporter** for GPU metrics.
   - Measure TTFT, tokens/sec, and memory use. After the GPU upgrade, measure again and compare CPU vs GPU.
-- **New words:** InferenceService, serving runtime, cold start, KV cache, batching, `max_model_len`, GPU memory utilization, DCGM.
+- **New words:** InferenceService, serving runtime, cold start, KV cache, batching, `max_model_len`, GPU memory utilization, DCGM, multi-tenancy, ResourceQuota, PriorityClass, preemption.
 - **Done when:** both models answer through KServe, and you have a table of cold-start time, TTFT and tokens/sec.
 - **Interview story:** "Cold start was N minutes because the pod downloaded 3 GB of weights from Hugging Face. Pre-staging in S3 with a cache brought it down to M." (We measure the real numbers.)
 - **Jobs:** Autodesk (core), AI platform, LLMOps.
 
-#### P5: Gateway and guardrails
+#### P6: Gateway and guardrails
 - **Goal:** one controlled front door for all LLM traffic.
 - **Build:**
   - LiteLLM proxy: route to self-hosted vLLM, fall back to Bedrock on errors or timeouts, per-client API keys, rate limits, budgets.
@@ -277,19 +306,20 @@ A phase is one or two 2–3-hour sessions.
 
 ### Milestone 3: automated and observable
 
-#### P6: CI/CD with an eval gate
+#### P7: CI/CD with an eval gate
 - **Goal:** prompt, model and code changes reach prod only through gates, with no manual deploys.
 - **Build:** GitHub Actions.
   - **app pipeline:** test → build → Trivy scan → push to ECR.
   - **eval pipeline:** on any change to `app/prompts/`, the model version or the app, run the golden set against a test deployment and fail on regression. Post the score as a PR comment.
   - **promotion:** a GitOps commit to staging values, then a PR for prod (the approval).
   - **infra pipeline:** `terraform plan` on PR, `apply` on approval.
+  - **training pipeline:** the trainer image is built and scanned in CI; a new dataset version in S3 triggers the training workflow (Argo Events); a newly promoted champion opens a PR that bumps the classifier's model version.
 - **New words:** eval gate in CI, immutable image tag, GitHub environments, required reviewers.
 - **Done when:** a PR with a worse prompt is blocked with the score in a comment, and a good PR reaches staging by itself.
 - **Interview story:** "Our pipeline treats prompts and model versions like code: the eval score is a required check on every PR."
 - **Jobs:** all (CI/CD is deep in every JD).
 
-#### P7: Observability
+#### P8: Observability
 - **Goal:** know within minutes when the system *or the answers* go wrong.
 - **Build:**
   - Prometheus + Grafana.
@@ -300,13 +330,14 @@ A phase is one or two 2–3-hour sessions.
     - **app:** RED metrics (rate, errors, duration) and dispute-type mix;
     - **quality:** online eval score on sampled traffic.
   - **SLOs**, e.g. p95 TTFT < 1.5 s and 99% success, with alerts.
-  - Logs to CloudWatch.
-- **New words:** SLO / SLI / error budget, RED metrics, PromQL, sampling.
-- **Done when:** the dashboards show live traffic, and an alert fires when TTFT breaks its SLO under load.
+  - **Logs:** the services write structured JSON logs (one line per request, with trace ID, model and prompt version, never the claim text). **Fluent Bit** ships them to **Loki**, searchable in Grafana next to the metrics. Same job as the ELK stack (Elasticsearch, Logstash, Kibana), cheaper to run.
+  - **Model performance and drift (classifier):** the live label mix and the confidence distribution compared with the training data. When they move too far apart (data drift), an alert fires, and it can start the P2 training pipeline: the monitoring → retraining loop.
+- **New words:** SLO / SLI / error budget, RED metrics, PromQL, sampling, structured logging, Loki / ELK, data drift, PSI (population stability index).
+- **Done when:** the dashboards show live traffic; an alert fires when TTFT breaks its SLO under load; one request can be followed from its log line to its trace; and sending December-style claims to the November model raises the drift alert.
 - **Interview story:** "For LLMs I watch three layers: infrastructure (GPU), serving (TTFT, queue), and quality (eval score on sampled traffic). Any one can fail while the others look fine."
 - **Jobs:** all (monitoring is deep in the Autodesk JD).
 
-#### P8: Autoscaling, performance and cost
+#### P9: Autoscaling, performance and cost
 - **Goal:** know the limits, scale on the right signal, and know the cost per request.
 - **Build:**
   - k6 load test.
@@ -322,7 +353,7 @@ A phase is one or two 2–3-hour sessions.
 
 ### Milestone 4: production-grade
 
-#### P9: Safe rollouts for models and prompts
+#### P10: Safe rollouts for models and prompts
 - **Goal:** a bad model or prompt can't hurt everyone.
 - **Build:**
   - KServe canary for a new model version (`canaryTrafficPercent`). A new prompt version gets a canary via the app's version routing.
@@ -334,13 +365,14 @@ A phase is one or two 2–3-hour sessions.
 - **Interview story:** "The new prompt passed offline evals but failed on real traffic patterns. The canary's online eval score dropped and we rolled back at 10% exposure."
 - **Jobs:** all.
 
-#### P10: Security and governance
+#### P11: Security and governance
 - **Goal:** would pass a bank's review.
 - **Build:**
   - Least-privilege Pod Identity (the LLM pods read only the weights bucket).
   - KMS encryption.
   - Secrets from AWS Secrets Manager via External Secrets (the gateway keys).
   - NetworkPolicies: only the app talks to the gateway; only the gateway talks to the LLM.
+  - **Team isolation:** each team's namespace has its own service accounts and RBAC; one team can't read another team's models, data or secrets.
   - Pod Security `restricted`.
   - Image scanning; model weights verified by checksum (provenance).
   - Audit log of prompts and versions, with PII masked.
@@ -350,7 +382,7 @@ A phase is one or two 2–3-hour sessions.
 - **Interview story:** "Every prompt and response is auditable without storing personal data: PII is masked before logging."
 - **Jobs:** banks, Autodesk (security is in the JD).
 
-#### P11: Incident drills
+#### P12: Incident drills
 - **Goal:** real troubleshooting stories, rehearsed. Each drill gets a runbook page; one gets a full blameless postmortem.
 - **Drills:**
   1. **GPU out of memory:** `max_model_len` too high → vLLM fails to start.
@@ -364,7 +396,7 @@ A phase is one or two 2–3-hour sessions.
 - **Done when:** seven runbooks, and you can tell any of them in 2 minutes as a STAR story.
 - **Jobs:** all (incident response is deep in the Autodesk JD).
 
-#### P12 (optional): SageMaker comparison
+#### P13 (optional): SageMaker comparison
 Deploy the same LLM to a SageMaker real-time endpoint (vLLM / LMI container) with Terraform, for a day. Write the comparison: control, cost, effort, and when to choose each. This gives an honest answer to "have you used SageMaker?", which matters for Autodesk.
 
 ---
@@ -373,14 +405,15 @@ Deploy the same LLM to a SageMaker real-time endpoint (vLLM / LMI container) wit
 
 | Milestone | Phases | Sessions | Cost | What you can say |
 | --- | --- | --- | --- | --- |
-| M1 Works on a laptop | P0–P2 | 4–5 | ~$0 | "I built an LLM app on Kubernetes with an eval gate and tracing" |
-| M2 LLM inference on EKS (CPU → GPU) | P3–P5 | 5–6 | ~$15–25 | "…serving an LLM with vLLM and KServe on EKS GPU nodes, behind a gateway with fallback and guardrails" |
-| M3 Automated + observable | P6–P8 | 5–6 | ~$15–30 | "…eval-gated CI/CD, GPU and LLM dashboards with SLOs, queue-based autoscaling, cost per token" |
-| M4 Production-grade | P9–P11 | 4–5 | ~$10–20 | "…canary releases for prompts and models, hardened for a bank, seven incident drills" |
+| M1 Works on a laptop | P0–P3 | 6–7 | ~$0 | "I built an LLM app on Kubernetes, a training pipeline that feeds it new model versions, and an eval gate with tracing" |
+| M2 LLM inference on EKS (CPU → GPU) | P4–P6 | 5–6 | ~$15–25 | "…serving an LLM with vLLM and KServe on EKS GPU nodes, behind a gateway with fallback and guardrails" |
+| M3 Automated + observable | P7–P9 | 5–6 | ~$15–30 | "…eval-gated CI/CD, GPU and LLM dashboards with SLOs, queue-based autoscaling, cost per token" |
+| M4 Production-grade | P10–P12 | 4–5 | ~$10–20 | "…canary releases for prompts and models, hardened for a bank, seven incident drills" |
 
 **Order:**
 - **Before 17 Nov:** Autodesk HR prep comes first. P0 can run in parallel, because the GPU quota request takes time.
 - **Then** M1 → M4. Every milestone is a complete, true story on its own.
+- **Track the work like a team would:** a GitHub Projects board (the free equivalent of Jira) with one issue per phase, worked in short sprints. Interview answer to "how do you track work?" and "have you used Agile?".
 
 ---
 
@@ -388,16 +421,21 @@ Deploy the same LLM to a SageMaker real-time endpoint (vLLM / LMI container) wit
 
 | Autodesk JD requirement | Phase |
 | --- | --- |
-| Kubernetes + Docker for ML workloads, scaling | P1, P3, P4, P8 |
-| Inference (title of the job) | P4, P8, P9 |
-| CI/CD and automated deployment for ML models | P6, P9 |
-| Terraform (minimum requirement) | P0, P3, P6 |
-| Monitoring and logging of systems and models | P7 |
-| Incident response, troubleshooting | P11 |
-| Security, access control, privacy | P5, P10 |
-| Model versioning, governance | P2, P6, P10 (plus B2 MLflow work) |
-| AWS (preferred) | Everything from P3; P12 for SageMaker |
-| GPUs (on your resume) | P3, P4, P7, P8: real hands-on GPU work, so resume claims are defensible |
+| Kubernetes + Docker for ML workloads, scaling | P1, P4, P5, P9 |
+| Scalable infrastructure for model training, inference **and data processing** | P2 (prepare + training pipeline on kind), P5 (on EKS, spot nodes, quotas per team), P7 (triggered retraining); optional GPU fine-tune |
+| An ML **platform** shared by many research and product teams | P5 (namespaces, quotas, priorities, shared pipeline template), P11 (team isolation) |
+| Inference (title of the job) | P5, P9, P10 |
+| CI/CD and automated deployment for ML models | P7, P10 |
+| Terraform (minimum requirement) | P0, P4, P7 |
+| Monitoring and logging of systems and models (Prometheus, Grafana, ELK) | P8: metrics, SLOs, Fluent Bit → Loki logs, classifier drift |
+| Incident response, troubleshooting | P12 |
+| Security, access control, privacy | P6, P11 |
+| Model versioning, governance | P2 (MLflow registry, champion/challenger, checksums), P3, P7, P11 |
+| AWS (preferred) | Everything from P4; P13 for SageMaker |
+| SQL / NoSQL / data lakes (preferred) | PostgreSQL for MLflow (P2, RDS in P4); S3 as a versioned dataset store, i.e. a small data lake (P2, P4) |
+| TensorFlow / PyTorch (preferred) | P2: a PyTorch candidate model in the training pipeline; vLLM (PyTorch) on GPU later |
+| Git, Jira, Agile (preferred) | Everything in Git (GitOps); GitHub Projects board, one issue per phase, sprints |
+| GPUs (on your resume) | P4, P5, P8, P9: real hands-on GPU work, so resume claims are defensible |
 
 ---
 
@@ -405,7 +443,7 @@ Deploy the same LLM to a SageMaker real-time endpoint (vLLM / LMI container) wit
 
 | Topic | Why | One-line answer if asked |
 | --- | --- | --- |
-| Training or fine-tuning LLMs | Data science / research work | "I serve and operate models; fine-tuning output arrives as new weights, which go through the same eval gate and canary" |
+| Training an LLM from scratch | Only a few labs do this; it costs millions. We train the classic model ourselves (P2) and can fine-tune Qwen with LoRA once a GPU is approved | "Companies start from a pretrained model. My platform runs the training jobs, and their output arrives as new weights that go through the same gates and canary" |
 | Big models (70B), multi-GPU, MIG | Cost | "Same platform: bigger GPU nodes, tensor parallelism in vLLM, and MIG to split one A100/H100 between small models" |
 | Full RAG with a vector database | Adds a data pipeline, not platform skill | "Retrieval is one more traced, evaluated step. Here it's a lookup; in production it's a vector DB like pgvector or OpenSearch" |
 | Multi-agent frameworks | AgentOps covered by tracing, guardrails, budgets | Your Foundry agent project covers agent hosting |

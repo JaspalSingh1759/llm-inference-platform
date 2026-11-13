@@ -1,0 +1,9 @@
+# The model was saved with these exact versions (B2 metadata.json); a pickle must be loaded with the same ones.
+scikit-learn==1.6.1
+numpy==2.4.6
+scipy==1.17.1
+joblib==1.4.2
+# Serving
+fastapi==0.115.6
+uvicorn==0.34.0
+prometheus-client==0.21.1
