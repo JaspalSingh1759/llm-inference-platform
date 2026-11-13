@@ -1,0 +1,15 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+# Local values (email, account-specific settings): copy the .example file
+*.tfvars
+!*.tfvars.example
+# Python
+.venv/
+__pycache__/
+# Secrets never go in Git
+.env
+*.pem

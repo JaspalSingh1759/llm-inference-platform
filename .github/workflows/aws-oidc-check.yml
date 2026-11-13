@@ -1,0 +1,23 @@
+# P0 check: proves GitHub Actions can reach AWS through OIDC with no stored keys.
+name: aws-oidc-check
+
+on:
+  workflow_dispatch: # run by hand from the Actions tab
+
+permissions:
+  id-token: write # lets the job request a GitHub OIDC token
+  contents: read
+
+jobs:
+  whoami:
+    runs-on: ubuntu-latest
+    environment: aws # matches the role's trust policy; can require a reviewer
+    steps:
+      - name: Get temporary AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Show who we are
+        run: aws sts get-caller-identity --query Arn --output text
