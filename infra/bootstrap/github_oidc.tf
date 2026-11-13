@@ -5,6 +5,13 @@ resource "aws_iam_openid_connect_provider" "github" {
   client_id_list = ["sts.amazonaws.com"]
 }
 
+locals {
+  # e.g. repo:JaspalSingh1759@59330899/llm-inference-platform@1456772034
+  github_owner   = split("/", var.github_repo)[0]
+  github_name    = split("/", var.github_repo)[1]
+  github_subject = "repo:${local.github_owner}@${var.github_owner_id}/${local.github_name}@${var.github_repo_id}"
+}
+
 data "aws_iam_policy_document" "github_trust" {
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -26,8 +33,8 @@ data "aws_iam_policy_document" "github_trust" {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
       values = [
-        "repo:${var.github_repo}:ref:refs/heads/main",
-        "repo:${var.github_repo}:environment:aws",
+        "${local.github_subject}:ref:refs/heads/main",
+        "${local.github_subject}:environment:aws",
       ]
     }
   }

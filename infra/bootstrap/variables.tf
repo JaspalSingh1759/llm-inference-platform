@@ -32,3 +32,18 @@ variable "github_repo" {
   type        = string
   default     = "JaspalSingh1759/llm-inference-platform"
 }
+
+# GitHub's OIDC "sub" claim now includes numeric IDs: repo:owner@<owner id>/name@<repo id>:...
+# so a deleted-and-recreated repo with the same name can't use the role.
+# Find them with: gh api repos/<owner>/<name> --jq '.owner.id, .id'
+variable "github_owner_id" {
+  description = "Numeric ID of the repo owner on GitHub."
+  type        = string
+  default     = "59330899"
+}
+
+variable "github_repo_id" {
+  description = "Numeric ID of the repo on GitHub."
+  type        = string
+  default     = "1456772034"
+}
