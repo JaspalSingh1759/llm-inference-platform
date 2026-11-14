@@ -17,6 +17,10 @@ spec:
         app.kubernetes.io/part-of: dispute-assistant
     spec:
       automountServiceAccountToken: false   # these apps never call the Kubernetes API
+      {{- with .Values.initContainers }}
+      initContainers:                       # run to completion before the app starts (e.g. fetch a model)
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Values.name }}
           image: "{{ required "image.repository is required" .Values.image.repository }}:{{ .Values.image.tag }}"

@@ -1,3 +1,4 @@
+import json
 import shutil
 from pathlib import Path
 
@@ -6,7 +7,7 @@ from fastapi.testclient import TestClient
 
 import server
 
-HERE = Path(__file__).parent.parent
+HERE = Path(__file__).parent / "fixtures"   # the B2 model, for tests only (not in the image)
 
 
 def client_for(model_dir, monkeypatch):
@@ -34,6 +35,16 @@ def test_tampered_model_is_refused(monkeypatch, tmp_path):
         assert r.status_code == 503
         assert "checksum mismatch" in r.json()["detail"]
         assert c.post("/v1/classify", json={"texts": ["x"]}).status_code == 503
+
+
+def test_unsupported_framework_is_refused(monkeypatch, tmp_path):
+    shutil.copy(HERE / "model.joblib", tmp_path)
+    metadata = json.loads((HERE / "metadata.json").read_text())
+    (tmp_path / "metadata.json").write_text(json.dumps({**metadata, "framework": "pytorch"}))
+    with client_for(tmp_path, monkeypatch) as c:
+        r = c.get("/readyz")
+        assert r.status_code == 503
+        assert "not supported" in r.json()["detail"]
 
 
 @pytest.mark.parametrize("body", [{"texts": []}, {}])

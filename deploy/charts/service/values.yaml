@@ -32,5 +32,6 @@ securityContext:
   readOnlyRootFilesystem: true
   capabilities: {drop: [ALL]}
 
+initContainers: []
 extraVolumes: []
 extraVolumeMounts: []

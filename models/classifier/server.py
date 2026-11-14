@@ -1,7 +1,9 @@
 """Serves the B2 dispute-type classifier (scikit-learn) over HTTP.
 
-The model file is a joblib pickle, and pickles can run code when loaded, so the server checks the
-file's SHA-256 against metadata.json before loading it. On a mismatch it refuses to start serving.
+The model is not in the image: an init container downloads a published version from the model store
+into MODEL_DIR (see fetch_model.py). The model file is a joblib pickle, and pickles can run code when
+loaded, so the server checks the file's SHA-256 against metadata.json before loading it, and refuses a
+framework this image can't run. Either way it stays "not ready" instead of serving.
 
   POST /v1/classify  {"texts": ["..."]}  →  {"predictions": [{"label": ..., "confidence": ...}], "model": {...}}
   GET  /healthz      process is alive
@@ -19,7 +21,9 @@ from fastapi import FastAPI, HTTPException, Response
 from prometheus_client import Counter, Histogram, CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
-MODEL_DIR = Path(os.environ.get("MODEL_DIR", Path(__file__).parent))
+MODEL_DIR = Path(os.environ.get("MODEL_DIR", "/model"))
+# This image has scikit-learn only. A PyTorch champion needs an image with PyTorch (P5: a KServe runtime per framework).
+SUPPORTED_FRAMEWORKS = {"scikit-learn"}
 
 PREDICTIONS = Counter("classifier_predictions_total", "Predictions made, by label", ["label"])
 LATENCY = Histogram("classifier_request_seconds", "Time to classify one request")
@@ -30,8 +34,11 @@ class ModelError(RuntimeError):
 
 
 def load_verified(model_dir):
-    """Loads model.joblib only if its checksum matches the one recorded in metadata.json."""
+    """Loads model.joblib only if its checksum matches metadata.json and this image supports its framework."""
     metadata = json.loads((model_dir / "metadata.json").read_text(encoding="utf-8"))
+    framework = metadata.get("framework", "scikit-learn")   # B2 models predate the field; they are scikit-learn
+    if framework not in SUPPORTED_FRAMEWORKS:
+        raise ModelError(f"framework {framework!r} is not supported by this image (supports {sorted(SUPPORTED_FRAMEWORKS)})")
     model_file = model_dir / "model.joblib"
     actual = hashlib.sha256(model_file.read_bytes()).hexdigest()
     if actual != metadata["file_sha256"]:
@@ -89,4 +96,6 @@ def classify(req: ClassifyRequest):
         PREDICTIONS.labels(str(classes[best])).inc()
     m = app.state.metadata
     return {"predictions": predictions,
-            "model": {"name": m["model"], "dataset_version": m["dataset"]["version"], "code_commit": m["code_commit"]}}
+            "model": {"name": m["model"], "version": m.get("registry", {}).get("version"),
+                      "framework": m.get("framework", "scikit-learn"),
+                      "dataset_version": m["dataset"]["version"], "code_commit": m["code_commit"]}}

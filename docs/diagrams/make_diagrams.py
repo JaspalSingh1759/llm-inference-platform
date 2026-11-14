@@ -153,8 +153,8 @@ s = Svg(1240, 480, "Fourteen phases, four milestones", "Each phase ends with som
 steps = [
     {"title": "P0 Foundations", "lines": ["budget, OIDC, quota"], "color": "blue"},
     {"title": "P1 Local LLM", "lines": ["kind + llama.cpp + app"], "color": "blue"},
-    {"title": "P2 Training", "lines": ["Argo, MLflow, gate"], "color": "blue", "bold": True},
-    {"title": "P3 Eval + traces", "lines": ["golden set, gate, OTel"], "color": "blue"},
+    {"title": "P2 Training", "lines": ["Argo, MLflow, gate"], "color": "blue"},
+    {"title": "P3 Eval + traces", "lines": ["golden set, gate, OTel"], "color": "blue", "bold": True},
     {"title": "P4 Terraform", "lines": ["VPC, EKS, node groups"], "color": "purple"},
     {"title": "P5 LLM serving", "lines": ["KServe · CPU → GPU"], "color": "purple"},
     {"title": "P6 Gateway", "lines": ["LiteLLM, guardrails"], "color": "purple"},
@@ -174,15 +174,15 @@ s.save("phases.svg")
 # 3. P2 training pipeline -------------------------------------------------------------------------
 s = Svg(1240, 690, "P2 training pipeline: raw data in, a served model version out",
         "Each step is a pod in an Argo Workflow. A failed step stops the run, and production keeps its current model")
-s.box(24, 115, 170, 100, "Raw data drop", ["MinIO (S3 later)", "raw/claims-<month>.csv", "from the data team"], "teal")
-s.box(24, 250, 170, 90, "Trigger", ["now: argo submit", "later: new raw file,", "drift alert, or cron"], "gray", dashed=True)
+s.box(24, 115, 170, 100, "Raw data drop", ["SeaweedFS (S3 later)", "raw/claims-<month>.csv", "from the data team"], "teal")
+s.box(24, 250, 170, 90, "Trigger", ["now: make train", "later: new raw file,", "drift alert, or cron"], "gray", dashed=True)
 s.arrow([(194, 165), (232, 165)])
 s.group(214, 80, 1002, 260, "Argo Workflow \"train-classifier\": one pod per step, all from the trainer image")
 steps = [("0 Prepare", ["raw CSV → clean,", "dedupe, split, version"], "teal"),
          ("1 Validate", ["schema, leakage,", "classes, file hashes"], "amber"),
          ("2 Train + gate", ["scikit-learn vs PyTorch,", "best on val, thresholds"], "amber"),
-         ("3 Compare", ["challenger vs", "champion, same data"], "amber"),
-         ("4 Publish", ["model + metadata", "(sha256) → store"], "purple")]
+         ("3 Compare", ["vs champion; same", "data+code = nothing new"], "amber"),
+         ("4 Publish", ["only if promoted:", "model + metadata → store"], "purple")]
 stops = [("stop: unreadable", "bad file / columns"), ("stop: bad data", "nothing is trained"),
          ("stop: gate failed", "saved, not registered"), ("stop: not better", "prod model unchanged")]
 W, STEP = 176, 196
@@ -199,7 +199,7 @@ tx, cx = 234 + 2 * STEP + 163, 234 + 3 * STEP + 163
 s.arrow([(tx, 215), (tx, 388)], dashed=True, label="register challenger", label_at=(tx - 54, 368), label_color=MUTED)
 s.arrow([(cx, 215), (cx, 388)], dashed=True, label="promote champion", label_at=(cx - 54, 368), label_color=MUTED)
 px = 234 + 4 * STEP + W // 2
-s.box(1030, 390, 186, 95, "Model store", ["MinIO (S3 later)", "models/dispute-", "classifier/v<N>/"], "blue")
+s.box(1030, 390, 186, 95, "Model store", ["SeaweedFS (S3 later)", "models/dispute-", "classifier/v<N>/"], "blue")
 s.arrow([(px, 215), (px, 388)])
 s.box(1010, 535, 206, 90, "GitOps commit", ["classifier model", "version = v<N> (PR)"], "purple")
 s.arrow([(px, 485), (px, 533)])

@@ -5,3 +5,34 @@ port: 8000
 resources:
   requests: {cpu: 100m, memory: 192Mi}
   limits: {memory: 384Mi}
+env:
+  MODEL_DIR: /model
+
+# The model is not in the image. This init container downloads one published version from the model
+# store (the P2 training pipeline publishes it). To ship a new model: change MODEL_VERSION, make deploy.
+initContainers:
+  - name: fetch-model
+    image: classifier:dev
+    imagePullPolicy: IfNotPresent
+    command: [python, fetch_model.py]
+    env:
+      - {name: MODEL_VERSION, value: v2}
+      - {name: MODEL_NAME, value: dispute-classifier}
+      - {name: MODEL_DIR, value: /model}
+      - {name: S3_ENDPOINT_URL, value: "http://s3.mlops.svc.cluster.local:8333"}
+      - {name: AWS_DEFAULT_REGION, value: us-east-1}
+      - {name: HOME, value: /tmp}
+    envFrom:
+      - secretRef: {name: s3-reader}     # read-only, models bucket only
+    resources:
+      requests: {cpu: 50m, memory: 96Mi}
+      limits: {memory: 192Mi}
+    securityContext: {runAsNonRoot: true, runAsUser: 10001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+    volumeMounts:
+      - {name: model, mountPath: /model}
+      - {name: tmp, mountPath: /tmp}
+extraVolumes:
+  - name: model
+    emptyDir: {}
+extraVolumeMounts:
+  - {name: model, mountPath: /model, readOnly: true}   # the server only reads it

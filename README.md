@@ -11,7 +11,7 @@ Use case: a fictional bank's dispute assistant (synthetic data only).
 
 - [x] P0 Foundations
 - [x] P1 Local LLM app
-- [ ] P2 Training pipeline (Argo Workflows, MLflow, retrain → gate → serve)
+- [x] P2 Training pipeline (Argo Workflows, MLflow, retrain → gate → serve)
 - [ ] P3 Eval + tracing
 - [ ] P4 Terraform (EKS, node groups)
 - [ ] P5 LLM serving (KServe: llama.cpp on CPU now, vLLM on GPU later)

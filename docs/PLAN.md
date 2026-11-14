@@ -168,7 +168,7 @@ llm-inference-platform/
 │   └── prompts/              versioned prompt files (prompt changes go through the eval gate)
 ├── models/classifier/    P1  the classifier's serving code (from P2 on, its weights come from the training pipeline)
 ├── training/             P2  trainer image (validate, train, register, publish), Argo WorkflowTemplate,
-│                             local MinIO (S3 stand-in) + MLflow
+│                             local SeaweedFS (S3 stand-in) + MLflow
 ├── evals/                P3  golden set (claims + expected type + must-mention facts) and eval runner
 ├── local/                P1  kind cluster config, Ollama, Phoenix: the free laptop stack
 ├── infra/                P0, P4  Terraform
@@ -233,17 +233,18 @@ A phase is one or two 2–3-hour sessions.
 - **Detailed plan:** [phases/p2-training-pipeline.md](phases/p2-training-pipeline.md)
 - **Goal:** the *training* half of an ML platform. New data goes in; a validated, versioned model comes out and reaches the serving pod with no manual steps in between.
 - **Build (on kind, $0):**
-  - **MinIO** as a local S3 (buckets for raw drops, datasets and models), and an **MLflow** server (tracking + registry) with a **PostgreSQL** database and its files in MinIO.
+  - **SeaweedFS** as a local S3 (a pipeline bucket, and a models bucket that serving can only read), and an **MLflow** server (tracking + registry) with a **PostgreSQL** database and its files in SeaweedFS.
   - A **trainer image** with the B2 code: `validate.py`, `train.py`, MLflow tracking, champion/challenger promotion. Pinned library versions, the same as the serving image.
   - A **prepare** step (data processing): a raw CSV export → cleaned, deduplicated, split into train/val/test, with a versioned manifest.
   - **Two model families compete:** scikit-learn (TF-IDF + logistic regression, from B2) and a small **PyTorch** text classifier, both on CPU. The better one on validation goes on to the gate. This shows the pipeline doesn't care which framework a team uses.
   - An **Argo Workflows** `WorkflowTemplate`: prepare → validate → train + gate → compare with the champion → publish. Each step is a pod; a failed step stops the run. Parameterised (raw file, model name), so another team could reuse it.
   - The **classifier pod loads its weights from the model store** (init container) instead of having them baked into the image. The model version is a Helm value, so a new model ships the same way as a new image tag.
   - Drills: a broken dataset is stopped at validation; a worse model is trained but not promoted.
-- **Later, on EKS:** the same workflow with S3 instead of MinIO, Pod Identity instead of keys, and training pods on spot nodes that scale to zero (P5). A new dataset in S3 triggers it (P7).
+- **Later, on EKS:** the same workflow with S3 instead of SeaweedFS, Pod Identity instead of keys, and training pods on spot nodes that scale to zero (P5). A new dataset in S3 triggers it (P7).
 - **Optional, after GPU approval:** a LoRA fine-tune of Qwen as a GPU Job, with checkpoints in S3 so a spot interruption resumes instead of restarting.
 - **New words:** Kubernetes Job, Argo Workflows, WorkflowTemplate, data preparation (ETL), artifact store, model registry, champion/challenger, PyTorch, init container, retraining trigger.
-- **Done when:** one `argo submit` turns a raw export into a registered, published model version, with both model families visible in MLflow; the classifier serves it after a values bump; the broken-data and worse-model drills both stop where they should.
+- **Status: done (2026-11-13).** Results and findings in the detailed plan.
+- **Done when:** one `make train` turns a raw export into a registered, published model version, with both model families visible in MLflow; the classifier serves it after a values bump; the broken-data and worse-model drills both stop where they should.
 - **Interview story:** "Training runs as a pipeline of pods: raw data is prepared and versioned, validation fails fast, scikit-learn and PyTorch candidates compete, the candidate must pass absolute thresholds and beat the production model, and only then is it registered and published with a checksum. Serving pulls an exact version, so every prediction traces back to a dataset and a commit."
 - **Jobs:** Autodesk ("infrastructure for model training"), MLOps, AI platform.
 
@@ -281,7 +282,7 @@ A phase is one or two 2–3-hour sessions.
 - **Build:**
   - Install KServe.
   - Classifier `InferenceService` on CPU, loading the champion version from the S3 model store.
-  - The P2 training pipeline moved to EKS: Argo Workflows, S3 instead of MinIO, training pods on spot nodes that scale to zero, MLflow on RDS with its artifacts in S3.
+  - The P2 training pipeline moved to EKS: Argo Workflows, S3 instead of SeaweedFS, training pods on spot nodes that scale to zero, MLflow on RDS with its artifacts in S3.
   - **A platform for many teams, not one app:** a namespace per team (`team-disputes`, plus a second example team) with a **ResourceQuota** (CPU, memory, GPU caps), and **PriorityClasses** so serving pods win over training pods when the cluster is full (training is retried; customers aren't kept waiting). The training WorkflowTemplate is shared, so a team submits a run with its own parameters instead of building its own pipeline.
   - LLM `InferenceService`. **Plan B:** llama.cpp server with Qwen2.5-0.5B (4-bit GGUF) on the LLM CPU nodes. **After GPU approval:** vLLM with Qwen2.5-1.5B on the GPU node; the T4 doesn't support bfloat16, so we set `dtype=half`.
   - Model weights pre-staged in S3 and cached on a volume, which cuts **cold start** (time from "pod scheduled" to "ready to answer").

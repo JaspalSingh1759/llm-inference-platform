@@ -4,8 +4,13 @@ NAMESPACE := dispute
 MODEL_FILE := local/models/qwen2.5-0.5b-instruct-q4_k_m.gguf
 MODEL_URL  := https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
 CHART := deploy/charts/service
+# P2 training pipeline
+B2_DATA ?= ../microsoft-agent-framework-foundry-starter-pack-net/mlops/data-pipeline/data
+ARGO_CHART_VERSION := 2.0.13
+GIT_COMMIT := $(shell git rev-parse --short HEAD)$(shell git diff --quiet HEAD -- training || echo -dirty)
+RAW ?= claims-2026-11.csv
 
-.PHONY: model cluster images deploy smoke test status down
+.PHONY: model cluster images deploy smoke test status down mlops mlops-images mlops-reset raw-drops train runs ui
 
 model: $(MODEL_FILE)
 $(MODEL_FILE):
@@ -19,6 +24,47 @@ images:
 	docker build -t classifier:dev models/classifier
 	docker build -t assistant:dev app
 	kind load docker-image classifier:dev assistant:dev --name $(CLUSTER)
+
+# --- P2: training pipeline -------------------------------------------------------------------------
+mlops-images:
+	docker build -t trainer:dev --build-arg GIT_COMMIT=$(GIT_COMMIT) training
+	docker build -t mlflow:dev training/mlflow
+	kind load docker-image trainer:dev mlflow:dev --name $(CLUSTER)
+
+# Storage (SeaweedFS as S3), PostgreSQL, MLflow, Argo Workflows and the pipeline template.
+mlops: mlops-images
+	training/scripts/secrets.sh
+	kubectl apply -f training/mlops.yaml
+	kubectl -n mlops rollout status deploy/s3 deploy/postgres --timeout=180s
+	training/scripts/buckets.sh
+	helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
+	helm upgrade --install argo-workflows argo/argo-workflows --version $(ARGO_CHART_VERSION) \
+	  -n argo --create-namespace -f training/argo-values.yaml --wait
+	kubectl -n mlops rollout status deploy/mlflow --timeout=180s
+	kubectl apply -f training/workflow.yaml
+
+# Plays the data team: B2 datasets → raw CSV exports (with duplicates and messy rows) → s3://mlops/raw/
+raw-drops:
+	mkdir -p training/raw
+	docker run --rm -v "$(abspath $(B2_DATA))":/in:ro -v "$(CURDIR)/training/raw":/out trainer:dev \
+	  python tools/make_raw_drops.py /in /out
+	training/scripts/upload_raw.sh
+
+# One pipeline run: make train RAW=claims-2026-11.csv
+train:
+	training/scripts/train.sh $(RAW)
+
+runs:
+	kubectl -n mlops get workflows
+
+# Local only: forget all training history (runs, MLflow, datasets, published models); raw drops stay.
+mlops-reset:
+	training/scripts/reset.sh
+
+# Argo UI on http://localhost:2746, MLflow UI on http://localhost:5000 (Ctrl-C to stop)
+ui:
+	kubectl -n argo port-forward svc/argo-workflows-server 2746:2746 & \
+	kubectl -n mlops port-forward svc/mlflow 5000:5000; kill %1
 
 deploy:
 	for svc in llm classifier assistant; do \
@@ -39,6 +85,7 @@ smoke:
 test:
 	cd app && ../.venv/bin/python -m pytest -q tests
 	cd models/classifier && ../../.venv/bin/python -m pytest -q tests
+	docker run --rm -v "$(CURDIR)/training/tests":/app/tests:ro trainer:dev python -m pytest -q -p no:cacheprovider tests
 
 status:
 	kubectl -n $(NAMESPACE) get pods -o wide

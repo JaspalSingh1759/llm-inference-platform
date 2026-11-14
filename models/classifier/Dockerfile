@@ -4,7 +4,9 @@ WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server.py model.joblib metadata.json ./
+# No model in the image: the init container (fetch_model.py) downloads a published version at startup.
+COPY server.py fetch_model.py ./
+ENV MODEL_DIR=/model
 
 # Non-root user with a fixed numeric ID, so Kubernetes can verify runAsNonRoot.
 RUN useradd --uid 10001 --no-create-home app
