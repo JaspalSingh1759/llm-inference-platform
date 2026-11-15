@@ -154,8 +154,8 @@ steps = [
     {"title": "P0 Foundations", "lines": ["budget, OIDC, quota"], "color": "blue"},
     {"title": "P1 Local LLM", "lines": ["kind + llama.cpp + app"], "color": "blue"},
     {"title": "P2 Training", "lines": ["Argo, MLflow, gate"], "color": "blue"},
-    {"title": "P3 Eval + traces", "lines": ["golden set, gate, OTel"], "color": "blue", "bold": True},
-    {"title": "P4 Terraform", "lines": ["VPC, EKS, node groups"], "color": "purple"},
+    {"title": "P3 Eval + traces", "lines": ["golden set, gate, OTel"], "color": "blue"},
+    {"title": "P4 Terraform", "lines": ["VPC, EKS, node groups"], "color": "purple", "bold": True},
     {"title": "P5 LLM serving", "lines": ["KServe · CPU → GPU"], "color": "purple"},
     {"title": "P6 Gateway", "lines": ["LiteLLM, guardrails"], "color": "purple"},
     {"title": "P7 CI/CD", "lines": ["eval gate → GitOps"], "color": "green"},
@@ -210,3 +210,87 @@ s.box(230, 535, 250, 90, "Assistant", ["POST /assist gets dispute", "types from 
 s.arrow([(530, 580), (482, 580)])
 s.legend(30, 668, [("amber", "Gates (a pod that can stop the run)"), ("teal", "Data in + data processing"), ("blue", "Storage + registry"), ("red", "Where a bad run stops")])
 s.save("training-pipeline.svg")
+
+
+# 4. P3 evaluation and tracing --------------------------------------------------------------------
+s = Svg(1240, 640, "P3: evaluation gate and tracing",
+        "Top: every request is one trace, one span per step. Bottom: a change ships only if the golden set still passes")
+s.group(24, 80, 1192, 210, "One request = one trace in Phoenix (OpenTelemetry). Each box is a span with its timing")
+spans = [("guardrail_input", ["mask card, phone,", "account, SIN, email"], "red"),
+         ("classify", ["label + confidence", "+ model version"], "blue"),
+         ("policy_lookup", ["policy text for", "that label"], "teal"),
+         ("llm", ["messages, tokens,", "prompt version"], "purple")]
+s.box(44, 135, 150, 100, "POST /assist", ["claim text"], "gray")
+for i, (title, lines, color) in enumerate(spans):
+    x = 240 + i * 215
+    s.box(x, 135, 180, 100, title, lines, color)
+    s.arrow([(x - 33 if i else 196, 185), (x - 2, 185)])
+s.box(1100, 135, 100, 100, "Reply", ["+ trace_id", "+ lineage"], "green")
+s.arrow([(240 + 3 * 215 + 180, 185), (1098, 185)])
+s.text(240 + 215 + 90, 262, "classifier service adds its own span (trace ID passed in the HTTP header)", size=12, color=MUTED)
+
+s.group(24, 320, 1192, 230, "make eval [PROMPT=candidate]: like a CI preview environment")
+s.box(44, 380, 200, 110, "Golden set", ["60 hand-written claims:", "clear, hard, PII,", "prompt injection"], "teal")
+s.box(290, 380, 200, 110, "Assistant", ["candidate deployed,", "every claim sent", "(2 at a time)"], "amber")
+s.box(536, 360, 230, 150, "Checks per reply", ["dispute type right?", "policy facts present?", "personal details repeated?",
+      "refund promised?", "numbers invented?", "latency"], "blue")
+s.box(812, 380, 180, 110, "LLM judge", ["counts only if it agrees", "with human labels", "(calibration set)"], "gray", dashed=True)
+s.diamond(1100, 435, 80, 55, "Gate")
+s.arrow([(244, 435), (288, 435)])
+s.arrow([(490, 435), (534, 435)])
+s.arrow([(766, 435), (810, 435)])
+s.arrow([(992, 435), (1018, 435)])
+s.text(1100, 520, "pass: ship · fail: exit 1", size=12, weight="700", color=MUTED)
+s.arrow([(390, 380), (390, 300)], dashed=True, label="trace link per failing case", label_at=(480, 312), label_color=MUTED)
+s.legend(30, 610, [("red", "Guardrail (masks before any model)"), ("blue", "Model / checks"), ("teal", "Data"), ("amber", "System under test")])
+s.save("eval-and-tracing.svg")
+
+
+# 5. Training data vs golden set ------------------------------------------------------------------
+s = Svg(1240, 470, "Training data and the golden set never mix",
+        "P2 builds the classifier from generated data. P3 tests the whole running system with claims nobody trained on")
+s.group(24, 80, 1192, 140, "P2 training pipeline: \"is this model good enough to publish?\"")
+s.box(44, 115, 220, 85, "Generated claims", ["CSV exports in S3", "(same generator for", "train, val and test)"], "teal")
+s.box(320, 115, 220, 85, "Train + gate", ["scikit-learn vs PyTorch", "test macro-F1 0.99"], "amber")
+s.box(596, 115, 220, 85, "Model v2 published", ["models/dispute-", "classifier/v2/"], "blue")
+s.arrow([(264, 157), (318, 157)])
+s.arrow([(540, 157), (594, 157)])
+s.group(24, 250, 1192, 160, "P3 evaluation: \"does the whole system answer real-looking claims correctly and safely?\"")
+s.box(44, 290, 220, 95, "Golden set", ["60 hand-written claims", "+ correct dispute type", "never used for training"], "teal", bold_border=True)
+s.box(596, 290, 360, 95, "Running app (the candidate)", ["guardrail → classifier v2 → policy →", "prompt → LLM → reply"], "green")
+s.box(1010, 290, 186, 95, "Score + gate", ["accuracy 0.67", "exit 0 or exit 1"], "amber")
+s.arrow([(264, 337), (594, 337)], label="sent one by one", label_at=(430, 327), label_color=MUTED)
+s.arrow([(956, 337), (1008, 337)])
+s.arrow([(706, 200), (706, 288)], label="the model under test", label_at=(790, 238), label_color=MUTED)
+s.text(620, 450, "0.99 on its own test vs 0.67 on the golden set: a test from the same source as the training data flatters the model",
+       size=13, weight="700", color=C["red"][1])
+s.save("train-vs-eval.svg")
+
+
+# 6. Candidate test in CI -------------------------------------------------------------------------
+s = Svg(1240, 560, "Where the candidate test runs in production: every pull request (P7)",
+        "A change that can affect answers is deployed next to production, scored on the golden set, and merged only if the gate passes")
+s.box(24, 110, 170, 95, "Pull request", ["prompt v2, classifier v3,", "bigger LLM, new policy"], "gray")
+s.group(220, 80, 760, 160, "CI pipeline (GitHub Actions)")
+s.box(240, 115, 160, 95, "1 Build", ["assistant image", "with the change"], "blue")
+s.box(420, 115, 180, 95, "2 Preview env", ["temporary namespace", "pr-42 = the candidate"], "green")
+s.box(620, 115, 160, 95, "3 Golden set", ["60 claims through", "the candidate"], "teal")
+s.diamond(880, 162, 75, 50, "4 Gate")
+s.arrow([(194, 157), (238, 157)])
+s.arrow([(400, 162), (418, 162)])
+s.arrow([(600, 162), (618, 162)])
+s.arrow([(780, 162), (803, 162)])
+s.box(1020, 110, 196, 95, "PR blocked", ["report attached:", "\"refund promises 10.7%\""], "red", dashed=True)
+s.arrow([(955, 162), (1018, 157)], color=C["red"][1], label="exit 1", label_at=(985, 148))
+s.box(780, 300, 200, 85, "Review + merge", ["to main"], "purple")
+s.arrow([(880, 212), (880, 298)], label="exit 0", label_at=(905, 260), label_color=C["green"][1])
+s.box(500, 300, 220, 85, "Argo CD (P7)", ["deploys main", "(GitOps)"], "purple")
+s.arrow([(780, 342), (722, 342)])
+s.box(220, 300, 220, 85, "Canary (P10)", ["5% of real traffic", "first, then 100%"], "amber")
+s.arrow([(500, 342), (442, 342)])
+s.box(24, 300, 150, 85, "Customers", ["production"], "green", bold_border=True)
+s.arrow([(220, 342), (176, 342)])
+s.text(510, 175 + 95, "step 5: delete the preview namespace (production was never touched)", size=12, color=MUTED)
+s.box(220, 430, 760, 70, "Our laptop version: make eval PROMPT=x",
+      ["same steps by hand: helm upgrade with the candidate → run_eval.py → exit 0/1 → trap puts v1 back"], "gray", dashed=True)
+s.save("candidate-in-ci.svg")

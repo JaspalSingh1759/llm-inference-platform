@@ -1,0 +1,24 @@
+# Facts each reply must state, per dispute type: the key steps and timelines of the policy
+# (app/policies.yaml). Patterns are case-insensitive regular expressions. Keep them in step with the policy.
+duplicate_charge:
+  temporary credit in 2 business days: 'temporary credit.{0,80}2 business days|2 business days.{0,80}temporary credit'
+  investigation up to 10 business days: '10 business days'
+incorrect_amount:
+  send the receipt or quote: 'receipt|quote'
+  investigation up to 30 days: '30 days'
+credit_not_processed:
+  bank contacts the merchant: 'contact(ing)? the merchant'
+  send refund confirmation or return receipt: 'confirmation|receipt'
+  investigation up to 30 days: '30 days'
+cancelled_recurring:
+  future charges blocked: 'block'
+  send the cancellation confirmation: 'cancellation confirmation|confirmation of (the |your )?cancellation'
+not_received:
+  contact the merchant first: 'merchant'
+  dispute after 7 days: '7 days'
+  investigation up to 45 days: '45 days'
+unauthorised:
+  card blocked: 'block'
+  new card issued: 'new (card|one)|replacement card'
+  temporary credit in 2 business days: '2 business days'
+  investigation up to 10 business days: '10 business days'

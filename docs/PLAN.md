@@ -88,7 +88,7 @@ Written 2026-11-12. This is a new, standalone project. It replaces the earlier A
 | LLM server | **vLLM** | The industry default for open-source LLMs; exposes an OpenAI-compatible API and rich Prometheus metrics | TGI, TensorRT-LLM, Triton: "vLLM for flexibility; TensorRT-LLM when squeezing the last 30% from NVIDIA GPUs" |
 | Model serving layer | **KServe** | Standard way to run many models on Kubernetes; supports vLLM and scikit-learn, canary traffic split, autoscaling | Plain Deployments work too. KServe is what platform teams use to serve *many teams'* models |
 | GPU | **One spot g4dn.xlarge** (NVIDIA T4, 16 GB) that scales **from 0** | Cheapest NVIDIA GPU on AWS; enough for a 1.5B model. Scale-from-zero means no GPU cost when idle | A10G/L4 (g5/g6) or A100/H100 for big models. Same YAML, bigger node |
-| Local development | **kind + Ollama** on your laptop | Free and fast. Ollama serves the same model with an OpenAI-compatible API, so app code doesn't change between laptop and EKS | — |
+| Local development | **kind + llama.cpp** on your laptop | Free and fast. llama.cpp's server runs the same model (4-bit GGUF) with an OpenAI-compatible API, so app code doesn't change between laptop and EKS | Ollama |
 | Gateway | **LiteLLM** proxy | Open-source; routing, fallback, keys, budgets in one place | Cloud API gateways or Kong AI Gateway: same job |
 | Fallback model | **Amazon Bedrock** | Managed LLMs on AWS; shows the "self-host vs managed API" trade-off | Azure OpenAI is the same idea; you've used it via Foundry |
 | Tracing | **OpenTelemetry → Arize Phoenix** (one container, self-hosted) | OpenTelemetry is the standard; Phoenix is light and LLM-aware | Langfuse (heavier to self-host), LangSmith, Datadog LLM Observability |
@@ -169,8 +169,8 @@ llm-inference-platform/
 ├── models/classifier/    P1  the classifier's serving code (from P2 on, its weights come from the training pipeline)
 ├── training/             P2  trainer image (validate, train, register, publish), Argo WorkflowTemplate,
 │                             local SeaweedFS (S3 stand-in) + MLflow
-├── evals/                P3  golden set (claims + expected type + must-mention facts) and eval runner
-├── local/                P1  kind cluster config, Ollama, Phoenix: the free laptop stack
+├── evals/                P3  golden set, policy facts, scoring rules, judge calibration, gate, eval runner
+├── local/                P1  kind cluster config, model file, Phoenix (P3): the free laptop stack
 ├── infra/                P0, P4  Terraform
 │   ├── bootstrap/            budget, state bucket, GitHub OIDC role
 │   └── platform/             VPC, EKS, CPU + GPU node groups, ECR, S3, IAM, Argo CD
@@ -209,7 +209,7 @@ A phase is one or two 2–3-hour sessions.
   - Check which GPUs and Bedrock models are available in us-east-1.
   - Terraform state bucket with locking.
   - GitHub repo + OIDC role, all in `infra/bootstrap/`.
-  - Install the local tools (Ollama, k6).
+  - Install the local tools (kind, Helm, k6).
 - **New words:** service quota, Terraform state, OIDC, least privilege.
 - **Done when:** the GPU quota request is approved (or pending), the budget exists, and GitHub can assume its AWS role.
 - **Interview story:** "Before any GPU work: cost guardrails, quota planning and keyless access."
@@ -219,14 +219,14 @@ A phase is one or two 2–3-hour sessions.
 - **Goal:** the whole request path working locally on Kubernetes.
 - **Build:**
   - a kind cluster;
-  - Ollama serving `qwen2.5:1.5b` (OpenAI-compatible API);
+  - llama.cpp serving Qwen2.5-0.5B-Instruct, 4-bit GGUF (OpenAI-compatible API);
   - the classifier as a small container;
   - the Assistant API (FastAPI) with `/assist`, `/healthz`, `/readyz` and `/metrics`;
   - prompts as versioned files in `app/prompts/`;
   - Helm charts for each piece.
 - **New words:** prompt template, system prompt, temperature, OpenAI-compatible API, readiness vs liveness.
 - **Done when:** `curl localhost/assist` returns a dispute type and a drafted reply that quotes the right policy.
-- **Interview story:** "The app talks to an OpenAI-compatible endpoint, so the same code runs against Ollama on my laptop, vLLM on a GPU, or a managed API. Only the URL changes."
+- **Interview story:** "The app talks to an OpenAI-compatible endpoint, so the same code runs against llama.cpp on my laptop, vLLM on a GPU, or a managed API. Only the URL changes."
 - **Jobs:** LLMOps, AgentOps.
 
 #### P2: Training pipeline (retrain → gate → serve)
@@ -249,6 +249,7 @@ A phase is one or two 2–3-hour sessions.
 - **Jobs:** Autodesk ("infrastructure for model training"), MLOps, AI platform.
 
 #### P3: Evaluation and tracing
+- **Detailed plan:** [phases/p3-evaluation-and-tracing.md](phases/p3-evaluation-and-tracing.md)
 - **Goal:** measure answer *quality*, and see inside every request.
 - **Build:**
   - A **golden set** of about 60 claims. Each has an expected dispute type, facts the reply must mention, and things it must never do (e.g. promise a refund, repeat a card number).
@@ -257,6 +258,7 @@ A phase is one or two 2–3-hour sessions.
   - OpenTelemetry tracing into Phoenix: one trace per request, one span per step.
 - **New words:** golden set, LLM-as-judge, faithfulness / hallucination, regression, span, trace.
 - **Done when:** a deliberately worse prompt fails the gate, and you can open the trace of a bad answer and see which step caused it.
+- **Status: done (2026-11-14).** The first run found production repeating card numbers (4 of 60 replies) and a classifier at 0.67 accuracy on real-style wording (0.99 on its own test). Prompt fixes regressed other metrics and the gate caught them; a regex input guardrail (masking before any model) fixed the leaks. The 0.5B judge agreed with human labels 50% of the time, so it doesn't gate. Results and findings in the detailed plan.
 - **Interview story:** "A prompt change is a code change. It doesn't ship unless the golden set still passes. When an answer is wrong in production, the trace shows whether retrieval, the model or the guardrail caused it."
 - **Jobs:** LLMOps (core).
 
@@ -297,8 +299,9 @@ A phase is one or two 2–3-hour sessions.
 - **Goal:** one controlled front door for all LLM traffic.
 - **Build:**
   - LiteLLM proxy: route to self-hosted vLLM, fall back to Bedrock on errors or timeouts, per-client API keys, rate limits, budgets.
-  - Presidio PII masking on input and output.
-  - Simple prompt-injection rules.
+  - Presidio PII masking on input and output, replacing P3's regex input guardrail (`app/assistant/guardrails.py`).
+  - Simple prompt-injection rules, and an **output check** for promised refunds: P3 showed injection works on the small model and masking can't stop it.
+  - A stronger **LLM judge** through the gateway; it counts in the P3 gate only once it passes the calibration set.
   - Token and cost metrics.
 - **New words:** fallback, rate limit, token budget, PII, prompt injection, defence in depth.
 - **Done when:** scaling the GPU deployment to 0 makes requests fall back to Bedrock (slower, but they keep working), and a claim with a card number never shows the number in logs or answers.

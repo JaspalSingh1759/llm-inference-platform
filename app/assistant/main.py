@@ -21,6 +21,9 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from prometheus_client import Counter, Histogram, CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
+from assistant import guardrails, tracing
+from assistant.tracing import tracer
+
 APP_DIR = Path(os.environ.get("APP_DIR", Path(__file__).parent.parent))
 CLASSIFIER_URL = os.environ.get("CLASSIFIER_URL", "http://classifier:8000")
 LLM_URL = os.environ.get("LLM_URL", "http://llm:8080/v1")
@@ -57,6 +60,7 @@ async def lifespan(app):
 
 
 app = FastAPI(title="dispute assistant", lifespan=lifespan)
+tracing.setup(app)
 
 
 @app.get("/metrics")
@@ -101,39 +105,70 @@ async def status(request: Request):
 async def assist(body: AssistRequest, request: Request):
     state = request.app.state
     start = time.perf_counter()
-    try:
-        # 1. Dispute type from the classic model
-        r = await state.http.post(f"{CLASSIFIER_URL}/v1/classify", json={"texts": [body.text]}, timeout=5)
-        r.raise_for_status()
-        prediction = r.json()["predictions"][0]
-        dispute_type = prediction["label"]
-        DISPUTE_TYPES.labels(dispute_type).inc()
+    with tracer.start_as_current_span("assist") as root:
+        root.set_attribute("openinference.span.kind", "CHAIN")
+        root.set_attribute("prompt.version", f"{state.prompt['name']}/{state.prompt['version']}")
+        # 0. Mask personal details first: nothing downstream (classifier, LLM, traces) sees them.
+        with tracer.start_as_current_span("guardrail_input") as span:
+            span.set_attribute("openinference.span.kind", "GUARDRAIL")
+            claim, masked = guardrails.mask_pii(body.text)
+            span.set_attribute("guardrail.masked_total", sum(masked.values()))
+            for kind, n in masked.items():
+                span.set_attribute(f"guardrail.masked.{kind}", n)
+        tracing.content(root, "input.value", claim)
+        try:
+            # 1. Dispute type from the classic model
+            with tracer.start_as_current_span("classify") as span:
+                span.set_attribute("openinference.span.kind", "TOOL")
+                r = await state.http.post(f"{CLASSIFIER_URL}/v1/classify", json={"texts": [claim]}, timeout=5)
+                r.raise_for_status()
+                classified = r.json()
+                prediction = classified["predictions"][0]
+                dispute_type = prediction["label"]
+                classifier_version = classified.get("model", {}).get("version")
+                span.set_attribute("classifier.label", dispute_type)
+                span.set_attribute("classifier.confidence", prediction["confidence"])
+                span.set_attribute("classifier.model_version", str(classifier_version))
+            DISPUTE_TYPES.labels(dispute_type).inc()
+            root.set_attribute("dispute_type", dispute_type)
 
-        # 2. Policy for that type, 3. prompt from the versioned template
-        prompt = state.prompt
-        messages = [
-            {"role": "system", "content": prompt["system"]},
-            {"role": "user", "content": prompt["user"].format(
-                claim=body.text, dispute_type=dispute_type, policy=state.policies[dispute_type])},
-        ]
+            # 2. Policy for that type (a lookup today; a vector search in a full RAG system)
+            with tracer.start_as_current_span("policy_lookup") as span:
+                span.set_attribute("openinference.span.kind", "RETRIEVER")
+                policy = state.policies[dispute_type]
+                span.set_attribute("retrieval.documents.0.document.id", dispute_type)
+                span.set_attribute("retrieval.documents.0.document.content", policy)   # bank policy, not personal data
 
-        # 4. Draft from the LLM (OpenAI-compatible chat completions)
-        llm_start = time.perf_counter()
-        r = await state.http.post(f"{LLM_URL}/chat/completions", timeout=LLM_TIMEOUT_S, json={
-            "model": LLM_MODEL, "messages": messages, **prompt["params"]})
-        r.raise_for_status()
-        llm_seconds = time.perf_counter() - llm_start
-        LLM_LATENCY.observe(llm_seconds)
-        completion = r.json()
-        usage = completion.get("usage", {})
-        TOKENS.labels("prompt").inc(usage.get("prompt_tokens", 0))
-        TOKENS.labels("completion").inc(usage.get("completion_tokens", 0))
-    except httpx.TimeoutException:
-        REQUESTS.labels("timeout").inc()
-        raise HTTPException(504, "a downstream service timed out")
-    except (httpx.HTTPError, KeyError, IndexError) as e:
-        REQUESTS.labels("error").inc()
-        raise HTTPException(502, f"downstream error: {type(e).__name__}")
+            # 3. Prompt from the versioned template
+            prompt = state.prompt
+            messages = [
+                {"role": "system", "content": prompt["system"]},
+                {"role": "user", "content": prompt["user"].format(
+                    claim=claim, dispute_type=dispute_type, policy=policy)},
+            ]
+
+            # 4. Draft from the LLM (OpenAI-compatible chat completions)
+            with tracer.start_as_current_span("llm") as span:
+                llm_start = time.perf_counter()
+                r = await state.http.post(f"{LLM_URL}/chat/completions", timeout=LLM_TIMEOUT_S, json={
+                    "model": LLM_MODEL, "messages": messages, **prompt["params"]})
+                r.raise_for_status()
+                llm_seconds = time.perf_counter() - llm_start
+                completion = r.json()
+                tracing.record_llm_call(span, completion.get("model", LLM_MODEL), messages, prompt["params"], completion)
+            LLM_LATENCY.observe(llm_seconds)
+            usage = completion.get("usage", {})
+            TOKENS.labels("prompt").inc(usage.get("prompt_tokens", 0))
+            TOKENS.labels("completion").inc(usage.get("completion_tokens", 0))
+        except httpx.TimeoutException:
+            REQUESTS.labels("timeout").inc()
+            raise HTTPException(504, "a downstream service timed out")
+        except (httpx.HTTPError, KeyError, IndexError) as e:
+            REQUESTS.labels("error").inc()
+            raise HTTPException(502, f"downstream error: {type(e).__name__}")
+        reply = completion["choices"][0]["message"]["content"].strip()
+        tracing.content(root, "output.value", reply)
+        trace_id = tracing.current_trace_id()
 
     total = time.perf_counter() - start
     LATENCY.observe(total)
@@ -141,10 +176,12 @@ async def assist(body: AssistRequest, request: Request):
     return {
         "dispute_type": dispute_type,
         "confidence": prediction["confidence"],
-        "draft_reply": completion["choices"][0]["message"]["content"].strip(),
-        # Lineage: which prompt and model produced this answer.
+        "draft_reply": reply,
+        # Lineage: which prompt and models produced this answer, and the trace that shows how.
         "prompt_version": f"{prompt['name']}/{prompt['version']}",
         "llm_model": completion.get("model", LLM_MODEL),
+        "classifier_version": classifier_version,
+        "trace_id": trace_id,
         "tokens": {"prompt": usage.get("prompt_tokens"), "completion": usage.get("completion_tokens")},
         "timings_ms": {"total": round(total * 1000), "llm": round(llm_seconds * 1000)},
     }

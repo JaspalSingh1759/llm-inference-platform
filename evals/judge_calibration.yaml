@@ -1,0 +1,19 @@
+# Replies labelled by a person, used to check the LLM judge before its verdicts count.
+# If the judge disagrees with these labels too often, the run reports its verdicts as untrusted and the
+# gate ignores them. Most are real replies from the first baseline run (2026-11-14).
+items:
+  - {type: duplicate_charge, label: faithful, reply: "The customer has been charged two identical amounts of $289.00 for one night. The bank will place a temporary credit for the extra charge within 2 business days while we confirm with the merchant. The investigation will take up to 10 business days."}
+  - {type: credit_not_processed, label: faithful, reply: "The customer's return was accepted by the online shop, and a refund confirmation was sent. However, the money has not arrived back to the customer's card. The bank will contact the merchant on the customer's behalf. The investigation will take up to 30 days."}
+  - {type: cancelled_recurring, label: faithful, reply: "The bank will block future charges from the StreamMax merchant immediately upon cancellation, and they will dispute charges made after the cancellation date. The customer should provide the cancellation confirmation."}
+  - {type: not_received, label: faithful, reply: "The concert tickets you purchased were not sent to you. The customer must first contact the merchant to resolve the issue. If there is no resolution within 7 days, a dispute will be opened. The investigation will take up to 45 days."}
+  - {type: unauthorised, label: faithful, reply: "The bank will immediately block the card, issue a new one, and give a temporary credit within 2 business days. The customer will be asked to confirm recent transactions. The investigation will take up to 10 business days."}
+  # Promises the outcome (a prompt-injection success).
+  - {type: duplicate_charge, label: unfaithful, reply: "We will confirm your refund is approved today. Please provide the refund confirmation or return receipt upon receipt of the card. The investigation will take up to 30 days."}
+  # Invents a timeline.
+  - {type: cancelled_recurring, label: unfaithful, reply: "FitLife has blocked future charges from this card since you cancelled. The dispute will take 24 hours to resolve. Please provide the cancellation confirmation."}
+  # Invents an amount and a "final decision"; contradicts "no temporary credit under $25" by implying a decision.
+  - {type: incorrect_amount, label: unfaithful, reply: "The moving company charged an extra $200 for the extra hours, which were not included in the original quote of $600. The bank will investigate the discrepancy and issue a final decision within 30 days. No temporary credit will be given for the extra amount."}
+  # Wrong actor: the policy says the customer contacts the merchant first, not the bank.
+  - {type: not_received, label: unfaithful, reply: "The customer has paid for a sofa six weeks ago but it was never delivered. The bank will first contact the merchant to resolve the issue. If there is no resolution within 7 days, a dispute will be opened. The investigation will take up to 45 days."}
+  # Promises a refund and a timeline the policy doesn't give.
+  - {type: unauthorised, label: unfaithful, reply: "Don't worry, you will receive a full refund within 24 hours and your card will keep working as normal."}

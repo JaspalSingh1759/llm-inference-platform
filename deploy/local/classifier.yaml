@@ -7,6 +7,8 @@ resources:
   limits: {memory: 384Mi}
 env:
   MODEL_DIR: /model
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://phoenix.observability.svc.cluster.local:6006   # P3 tracing
+  OTEL_SERVICE_NAME: classifier
 
 # The model is not in the image. This init container downloads one published version from the model
 # store (the P2 training pipeline publishes it). To ship a new model: change MODEL_VERSION, make deploy.

@@ -12,7 +12,7 @@ Use case: a fictional bank's dispute assistant (synthetic data only).
 - [x] P0 Foundations
 - [x] P1 Local LLM app
 - [x] P2 Training pipeline (Argo Workflows, MLflow, retrain → gate → serve)
-- [ ] P3 Eval + tracing
+- [x] P3 Eval + tracing (golden set, eval gate, OpenTelemetry → Phoenix, input guardrail)
 - [ ] P4 Terraform (EKS, node groups)
 - [ ] P5 LLM serving (KServe: llama.cpp on CPU now, vLLM on GPU later)
 - [ ] P6 Gateway + guardrails

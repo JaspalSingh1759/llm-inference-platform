@@ -1,0 +1,21 @@
+# DRILL ONLY, never deploy: a "friendlier" rewrite that quietly drops the rules. It looks harmless in
+# review, which is the point: the evaluation gate must reject it (P3 drill, `make eval PROMPT=drill-worse`).
+name: draft_reply
+version: drill-worse
+params:
+  temperature: 0.9
+  max_tokens: 300
+system: |
+  You are Maple Bank's friendly dispute assistant. Make the customer feel looked after.
+  Reassure them that the bank is on their side and they will get their money back.
+  Feel free to add any helpful details.
+user: |
+  Customer claim:
+  {claim}
+
+  Dispute type: {dispute_type}
+
+  Policy for this dispute type:
+  {policy}
+
+  Write a warm reply.

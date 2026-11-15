@@ -1,0 +1,59 @@
+# P3: Arize Phoenix, the trace viewer (one container, self-hosted). It receives OpenTelemetry traces
+# (OTLP over HTTP on 6006/v1/traces, gRPC on 4317) and shows them in its UI on 6006.
+# Traces are kept in SQLite on a small volume. On EKS: the same pod with PostgreSQL, or a managed backend.
+apiVersion: v1
+kind: Namespace
+metadata: {name: observability}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: phoenix-data, namespace: observability}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: phoenix, namespace: observability, labels: {app.kubernetes.io/name: phoenix}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}          # SQLite: one writer
+  selector: {matchLabels: {app.kubernetes.io/name: phoenix}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: phoenix}}
+    spec:
+      automountServiceAccountToken: false
+      # Kubernetes would inject PHOENIX_PORT=tcp://<ip>:6006 for the Service named phoenix, which clashes
+      # with Phoenix's own PHOENIX_PORT setting. These old-style variables aren't needed (DNS is used).
+      enableServiceLinks: false
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532}   # the image's nonroot user
+      containers:
+        - name: phoenix
+          image: arizephoenix/phoenix:version-20.27.0-nonroot
+          env:
+            - {name: PHOENIX_WORKING_DIR, value: /data}
+            - {name: PHOENIX_PORT, value: "6006"}
+            - {name: PHOENIX_TELEMETRY_ENABLED, value: "false"}   # no usage data sent to the vendor
+          ports:
+            - {name: http, containerPort: 6006}
+            - {name: otlp-grpc, containerPort: 4317}
+          readinessProbe: {httpGet: {path: /healthz, port: http}, periodSeconds: 5}
+          resources:
+            requests: {cpu: 100m, memory: 384Mi}
+            limits: {memory: 1Gi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: phoenix-data}}
+        - {name: tmp, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: phoenix, namespace: observability}
+spec:
+  selector: {app.kubernetes.io/name: phoenix}
+  ports:
+    - {name: http, port: 6006, targetPort: http}
+    - {name: otlp-grpc, port: 4317, targetPort: otlp-grpc}

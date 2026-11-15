@@ -10,7 +10,7 @@ ARGO_CHART_VERSION := 2.0.13
 GIT_COMMIT := $(shell git rev-parse --short HEAD)$(shell git diff --quiet HEAD -- training || echo -dirty)
 RAW ?= claims-2026-11.csv
 
-.PHONY: model cluster images deploy smoke test status down mlops mlops-images mlops-reset raw-drops train runs ui
+.PHONY: model cluster images deploy smoke test status down mlops mlops-images mlops-reset raw-drops train runs ui tracing eval
 
 model: $(MODEL_FILE)
 $(MODEL_FILE):
@@ -61,10 +61,20 @@ runs:
 mlops-reset:
 	training/scripts/reset.sh
 
-# Argo UI on http://localhost:2746, MLflow UI on http://localhost:5000 (Ctrl-C to stop)
+# Argo on http://localhost:2746, MLflow on http://localhost:5000, Phoenix on http://localhost:6006 (Ctrl-C to stop)
 ui:
 	kubectl -n argo port-forward svc/argo-workflows-server 2746:2746 & \
-	kubectl -n mlops port-forward svc/mlflow 5000:5000; kill %1
+	kubectl -n observability port-forward svc/phoenix 6006:6006 & \
+	kubectl -n mlops port-forward svc/mlflow 5000:5000; kill %1 %2
+
+# --- P3: evaluation and tracing ----------------------------------------------------------------------
+tracing:
+	kubectl apply -f local/phoenix.yaml
+	kubectl -n observability rollout status deploy/phoenix --timeout=300s
+
+# Golden set against the running assistant: make eval; a candidate prompt: make eval PROMPT=v2
+eval:
+	evals/eval.sh $(PROMPT)
 
 deploy:
 	for svc in llm classifier assistant; do \
@@ -86,6 +96,7 @@ test:
 	cd app && ../.venv/bin/python -m pytest -q tests
 	cd models/classifier && ../../.venv/bin/python -m pytest -q tests
 	docker run --rm -v "$(CURDIR)/training/tests":/app/tests:ro trainer:dev python -m pytest -q -p no:cacheprovider tests
+	cd evals && ../.venv/bin/python -m pytest -q tests
 
 status:
 	kubectl -n $(NAMESPACE) get pods -o wide

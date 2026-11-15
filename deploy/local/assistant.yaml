@@ -8,6 +8,10 @@ env:
   LLM_MODEL: qwen2.5-0.5b-instruct
   PROMPT_VERSION: v1
   LLM_TIMEOUT_S: "30"
+  # P3 tracing: spans go to Phoenix. Content capture is on only here (synthetic data); see app/assistant/tracing.py.
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://phoenix.observability.svc.cluster.local:6006
+  OTEL_SERVICE_NAME: assistant
+  TRACE_CONTENT: "true"
 service:
   type: NodePort
   nodePort: 30080             # kind maps this to localhost:8080 on the Mac

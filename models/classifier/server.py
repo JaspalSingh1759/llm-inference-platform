@@ -59,6 +59,22 @@ async def lifespan(app):
 
 app = FastAPI(title="dispute classifier", lifespan=lifespan)
 
+# Tracing (P3), only when a collector is configured. The assistant sends the trace ID with each call,
+# so this service's time appears inside the same trace.
+if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+    from opentelemetry import trace
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+    _provider = TracerProvider(resource=Resource.create(
+        {"openinference.project.name": os.environ.get("PHOENIX_PROJECT", "dispute-assistant")}))
+    _provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+    trace.set_tracer_provider(_provider)
+    FastAPIInstrumentor.instrument_app(app, excluded_urls="healthz,readyz,metrics", exclude_spans=["receive", "send"])
+
 
 @app.get("/metrics")
 def metrics():
