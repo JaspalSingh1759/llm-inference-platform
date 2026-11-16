@@ -32,6 +32,10 @@ securityContext:
   readOnlyRootFilesystem: true
   capabilities: {drop: [ALL]}
 
+priorityClassName: ""         # EKS: serving
+nodeSelector: {}              # EKS: pick a node group, e.g. {node-role: system}
+tolerations: []               # needed only to run on tainted nodes (llm, gpu)
+
 initContainers: []
 extraVolumes: []
 extraVolumeMounts: []

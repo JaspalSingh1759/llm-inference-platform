@@ -265,6 +265,7 @@ A phase is one or two 2–3-hour sessions.
 ### Milestone 2: LLM inference on EKS (CPU now, GPU after quota approval)
 
 #### P4: The platform in Terraform
+- **Detailed plan:** [phases/p4-platform-terraform.md](phases/p4-platform-terraform.md)
 - **Goal:** one `terraform apply` builds the AWS side; one `destroy` removes it.
 - **Build:**
   - VPC;
@@ -276,10 +277,13 @@ A phase is one or two 2–3-hour sessions.
   - Argo CD installed by Terraform.
 - **New words:** node group, taint/toleration, spot instance, EKS accelerated AMI, Terraform module.
 - **Done when:** the cluster is up, and a test pod with the LLM toleration lands only on the LLM node group. After GPU approval: a GPU pod runs `nvidia-smi` and the GPU node scales back to 0 afterwards.
+- **Status: done (2026-11-16).** 101 resources applied first time; all checks passed. A spot interruption after 13 minutes, with no capacity to replace it, led to widening the spot pool from 3 to 11 instance types (placement score 1–2 → 9). Results in the detailed plan.
 - **Interview story:** "GPU nodes are tainted and scale from zero, so we only pay for a GPU while a model needs one."
 - **Jobs:** MLOps inference (Autodesk), AI platform.
 
 #### P5: Serving the models with KServe
+- **Detailed plan:** [phases/p5-serving-on-eks.md](phases/p5-serving-on-eks.md)
+- **Status: done on CPU (2026-11-16).** Both models on KServe with weights from S3 via Pod Identity; the golden-set gate passes on EKS (p95 9.5 s vs 13.4 s on the laptop); the training pipeline runs on spot nodes as a shared ClusterWorkflowTemplate and the classifier serves the v2 it published (same dataset version as on the laptop); quota, data-isolation and preemption drills passed. GPU/vLLM after quota approval.
 - **Goal:** both models served on Kubernetes the way a platform team would do it.
 - **Build:**
   - Install KServe.

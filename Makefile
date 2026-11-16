@@ -10,7 +10,7 @@ ARGO_CHART_VERSION := 2.0.13
 GIT_COMMIT := $(shell git rev-parse --short HEAD)$(shell git diff --quiet HEAD -- training || echo -dirty)
 RAW ?= claims-2026-11.csv
 
-.PHONY: model cluster images deploy smoke test status down mlops mlops-images mlops-reset raw-drops train runs ui tracing eval
+.PHONY: model cluster images deploy smoke test status down mlops mlops-images mlops-reset raw-drops train runs ui tracing eval eks-plan eks-up eks-down eks-kubeconfig eks-check eks-identity eks-serving eks-training eks-train eks-leftovers
 
 model: $(MODEL_FILE)
 $(MODEL_FILE):
@@ -104,3 +104,56 @@ status:
 
 down:
 	kind delete cluster --name $(CLUSTER)
+
+# --- P4: the platform on AWS (costs money while it exists: ~$0.36/hour) --------------------------------
+# Plan first (free, read-only), review it, then apply exactly that plan. Destroy at the end of every session.
+TF_PLATFORM := terraform -chdir=infra/platform
+MY_IP = $(shell curl -s https://checkip.amazonaws.com)
+
+eks-plan:
+	$(TF_PLATFORM) init -input=false >/dev/null
+	$(TF_PLATFORM) plan -input=false -var 'admin_cidrs=["$(MY_IP)/32"]' -out=platform.tfplan
+
+eks-up:
+	$(TF_PLATFORM) apply -input=false platform.tfplan
+	$(MAKE) eks-kubeconfig
+
+eks-kubeconfig:
+	$$($(TF_PLATFORM) output -raw kubeconfig_command)
+	kubectl config use-context llm-platform-eks
+
+# Done-when check: the tolerating pod lands on the LLM node, the others don't.
+eks-check:
+	kubectl get nodes -L node-role,eks.amazonaws.com/capacityType
+	kubectl apply -f deploy/eks/placement-test.yaml
+	kubectl -n placement-test wait --for=condition=Ready pod/wants-llm-node pod/ordinary --timeout=120s
+	@for p in wants-llm-node ordinary no-toleration; do \
+	  node=$$(kubectl -n placement-test get pod $$p -o jsonpath='{.spec.nodeName}'); \
+	  role=$$( [ -n "$$node" ] && kubectl get node $$node -o jsonpath='{.metadata.labels.node-role}'); \
+	  echo "$$p -> $${node:-<not scheduled>} ($${role:-pending})"; \
+	done
+	kubectl delete namespace placement-test --wait=false
+
+eks-down:
+	kubectl config use-context kind-$(CLUSTER) 2>/dev/null || true
+	$(TF_PLATFORM) destroy -input=false -var 'admin_cidrs=["$(MY_IP)/32"]'
+	infra/platform/leftovers.sh
+
+# P5: serving (cert-manager, KServe, both models, assistant) and training (teams, MLflow on RDS, Argo, template).
+eks-serving:
+	deploy/eks/install-serving.sh
+	kubectl apply -f deploy/eks/teams.yaml -f deploy/eks/inference-services.yaml
+	helm upgrade --install assistant $(CHART) -f deploy/eks/assistant.yaml -n dispute --wait
+
+eks-training:
+	deploy/eks/install-training.sh
+
+# One pipeline run on EKS: make eks-train RAW=claims-2026-11.csv [TEAM_NS=team-fraud]
+eks-train:
+	NAMESPACE=$(or $(TEAM_NS),mlops) CLUSTER_TEMPLATE=true training/scripts/train.sh $(RAW)
+
+eks-identity:
+	deploy/eks/pod-identity-test.sh
+
+eks-leftovers:
+	infra/platform/leftovers.sh

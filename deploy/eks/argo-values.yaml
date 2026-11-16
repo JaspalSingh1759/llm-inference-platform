@@ -1,0 +1,31 @@
+# P5: Argo Workflows on EKS (chart argo/argo-workflows 2.0.13, Argo v4.1.5), same chart as on kind (training/argo-values.yaml).
+# Differences: files between steps go to real S3 with Pod Identity (no keys), and more than one team's namespace.
+controller:
+  workflowNamespaces: [mlops, team-fraud]   # the disputes team (mlops) and a second example team (P5 part 3)
+  nodeSelector: {node-role: system}
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 512Mi}
+
+workflow:
+  serviceAccount:
+    create: true
+    name: trainer            # Pod Identity: mlops/trainer → role llm-platform-trainer
+  rbac:
+    create: true
+
+server:
+  authModes: [server]        # port-forward only; SSO in P11
+  nodeSelector: {node-role: system}
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+
+useStaticCredentials: false
+artifactRepository:
+  s3:
+    bucket: llm-platform-mlops-352184619391
+    endpoint: s3.amazonaws.com
+    region: us-east-1
+    keyFormat: "argo/{{workflow.name}}/{{pod.name}}"
+    useSDKCreds: true        # the AWS SDK's default chain: picks up Pod Identity credentials in the step pod

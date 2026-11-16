@@ -13,8 +13,8 @@ Use case: a fictional bank's dispute assistant (synthetic data only).
 - [x] P1 Local LLM app
 - [x] P2 Training pipeline (Argo Workflows, MLflow, retrain → gate → serve)
 - [x] P3 Eval + tracing (golden set, eval gate, OpenTelemetry → Phoenix, input guardrail)
-- [ ] P4 Terraform (EKS, node groups)
-- [ ] P5 LLM serving (KServe: llama.cpp on CPU now, vLLM on GPU later)
+- [x] P4 Terraform (EKS, node groups, S3, ECR, RDS, Pod Identity, Argo CD)
+- [x] P5 Serving + training on EKS (KServe, Argo Workflows, quotas, priorities; GPU/vLLM after quota)
 - [ ] P6 Gateway + guardrails
 - [ ] P7 CI/CD with eval gate
 - [ ] P8 Observability

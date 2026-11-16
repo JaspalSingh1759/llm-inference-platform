@@ -17,6 +17,17 @@ spec:
         app.kubernetes.io/part-of: dispute-assistant
     spec:
       automountServiceAccountToken: false   # these apps never call the Kubernetes API
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}            # EKS: serving pods win over training pods when the cluster is full
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:                         # which node group (EKS: node-role=system / llm)
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.initContainers }}
       initContainers:                       # run to completion before the app starts (e.g. fetch a model)
         {{- toYaml . | nindent 8 }}

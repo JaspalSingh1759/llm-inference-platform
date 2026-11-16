@@ -2,8 +2,9 @@
 # Prints each step of a pipeline run with its result, and the log of the step that stopped it.
 set -euo pipefail
 NAME=${1:?usage: run_summary.sh <workflow name>}
-WF=$(kubectl -n mlops get workflow "$NAME" -o json)
-PODS=$(kubectl -n mlops get pods -l "workflows.argoproj.io/workflow=$NAME" -o json)
+NAMESPACE=${NAMESPACE:-mlops}
+WF=$(kubectl -n "$NAMESPACE" get workflow "$NAME" -o json)
+PODS=$(kubectl -n "$NAMESPACE" get pods -l "workflows.argoproj.io/workflow=$NAME" -o json)
 
 python3 - "$WF" "$PODS" <<'PY'
 import json, sys
@@ -31,5 +32,5 @@ PY
 if [ -s /tmp/.p2-failed-pod ]; then
   POD=$(cat /tmp/.p2-failed-pod); rm -f /tmp/.p2-failed-pod
   echo; echo "--- log of the step that stopped the run ($POD) ---"
-  kubectl -n mlops logs "$POD" -c main 2>/dev/null | tail -25 || echo "(pod already removed)"
+  kubectl -n "$NAMESPACE" logs "$POD" -c main 2>/dev/null | tail -25 || echo "(pod already removed)"
 fi

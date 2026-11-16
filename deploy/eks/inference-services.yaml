@@ -1,0 +1,80 @@
+# P5: both models served by KServe (Standard mode: a Deployment + Service per InferenceService).
+# KServe's storage initializer (an init container it adds) downloads STORAGE_URI to /mnt/models before the
+# server starts, using the pod's service account, so Pod Identity grants the S3 read: no keys.
+apiVersion: v1
+kind: Namespace
+metadata: {name: dispute}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: classifier, namespace: dispute}   # Pod Identity → role llm-platform-classifier (read models/dispute-classifier/)
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: llm, namespace: dispute}          # Pod Identity → role llm-platform-llm (read models/llm/)
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: classifier
+  namespace: dispute
+  annotations:
+    serving.kserve.io/autoscalerClass: external     # no HPA yet (P9 adds autoscaling)
+spec:
+  predictor:
+    serviceAccountName: classifier
+    priorityClassName: serving        # P5 part 3: wins over training pods
+    nodeSelector: {node-role: system}
+    minReplicas: 1
+    maxReplicas: 1
+    containers:
+      - name: kserve-container
+        # Our own server (checksum + framework checks), not KServe's generic sklearn runtime.
+        image: 352184619391.dkr.ecr.us-east-1.amazonaws.com/llm-platform/classifier:fe78dd5
+        env:
+          - {name: STORAGE_URI, value: "s3://llm-platform-models-352184619391/dispute-classifier/v2/"}
+          - {name: MODEL_DIR, value: /mnt/models}
+        ports: [{containerPort: 8000, protocol: TCP}]
+        readinessProbe: {httpGet: {path: /readyz, port: 8000}, periodSeconds: 5}
+        livenessProbe: {httpGet: {path: /healthz, port: 8000}, periodSeconds: 10}
+        resources:
+          requests: {cpu: 100m, memory: 192Mi}
+          limits: {memory: 384Mi}
+        securityContext: {runAsNonRoot: true, runAsUser: 10001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: llm
+  namespace: dispute
+  annotations:
+    serving.kserve.io/autoscalerClass: external
+spec:
+  predictor:
+    serviceAccountName: llm
+    priorityClassName: serving
+    # Only on the tainted spot LLM nodes.
+    nodeSelector: {node-role: llm}
+    tolerations:
+      - {key: workload, operator: Equal, value: llm, effect: NoSchedule}
+    minReplicas: 1
+    maxReplicas: 1
+    # One replica filling its node: a rolling update would wait forever for room for the new pod, so stop the
+    # old one first (a short gap; P9 adds a second replica and a PodDisruptionBudget).
+    deploymentStrategy: {type: Recreate}
+    containers:
+      - name: kserve-container
+        # The exact llama.cpp server image tested on kind in P1, pinned by digest (amd64 + arm64).
+        image: ghcr.io/ggml-org/llama.cpp@sha256:e3032ea0712da96dec820c770626385de4322dd06619fb5829256a504bbc9375
+        args: [--model, /mnt/models/model.gguf, --alias, qwen2.5-0.5b-instruct, --host, 0.0.0.0, --port, "8080",
+               --ctx-size, "4096", --parallel, "2", --threads, "2", --metrics]
+        env:
+          - {name: STORAGE_URI, value: "s3://llm-platform-models-352184619391/llm/qwen2.5-0.5b-instruct-q4_k_m/"}
+        ports: [{containerPort: 8080, protocol: TCP}]
+        readinessProbe: {httpGet: {path: /health, port: 8080}, periodSeconds: 5}
+        startupProbe: {httpGet: {path: /health, port: 8080}, periodSeconds: 5, failureThreshold: 60}
+        resources:
+          requests: {cpu: 1500m, memory: 1Gi}   # a 2-vCPU spot node, minus the per-node agents
+          # Explicit, because KServe otherwise adds a default CPU limit of 1 core (below the request).
+          limits: {cpu: "2", memory: 2Gi}
+        securityContext: {runAsNonRoot: true, runAsUser: 10001, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}

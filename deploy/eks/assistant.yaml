@@ -1,0 +1,15 @@
+# P5: the assistant on EKS. Same chart and image as on kind; only the values differ.
+# The classifier and LLM are KServe InferenceServices; KServe names their Services <name>-predictor (port 80).
+name: assistant
+image:
+  repository: 352184619391.dkr.ecr.us-east-1.amazonaws.com/llm-platform/assistant
+  tag: fe78dd5                 # git commit; ECR tags are immutable
+port: 8000
+nodeSelector: {node-role: system}
+priorityClassName: serving
+env:
+  CLASSIFIER_URL: http://classifier-predictor
+  LLM_URL: http://llm-predictor/v1
+  LLM_MODEL: qwen2.5-0.5b-instruct
+  PROMPT_VERSION: v1
+  LLM_TIMEOUT_S: "30"

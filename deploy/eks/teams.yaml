@@ -1,0 +1,67 @@
+# P5 part 3: one cluster shared by several teams.
+#   PriorityClasses   when the cluster is full, serving wins: the scheduler evicts (preempts) training pods to make
+#                     room, and Argo retries the interrupted step. Training never evicts anyone.
+#   ResourceQuota     a cap per namespace, so one team can't take the whole cluster.
+#   LimitRange        default requests/limits for containers that set none (a quota needs every pod to declare them).
+# Namespaces: disputes team = dispute (serving) + mlops (training); a second example team = team-fraud.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: {name: serving}
+value: 100000
+description: "Customer-facing serving and platform services: may preempt training pods."
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: {name: training}
+value: 1000
+preemptionPolicy: Never          # waits for room instead of evicting anyone
+description: "Batch training pods: retryable, evicted first when serving needs the room."
+---
+apiVersion: v1
+kind: Namespace
+metadata: {name: dispute, labels: {team: disputes}}
+---
+apiVersion: v1
+kind: Namespace
+metadata: {name: mlops, labels: {team: disputes}}
+---
+apiVersion: v1
+kind: Namespace
+metadata: {name: team-fraud, labels: {team: fraud}}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: compute, namespace: dispute}
+spec:
+  hard: {requests.cpu: "3", requests.memory: 3Gi, limits.memory: 5Gi, pods: "15"}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: compute, namespace: mlops}
+spec:
+  hard: {requests.cpu: "2", requests.memory: 4Gi, limits.memory: 8Gi, pods: "30"}
+---
+# A new team starts small; raising its quota is a reviewed change (and a cost decision).
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: compute, namespace: team-fraud}
+spec:
+  hard: {requests.cpu: 500m, requests.memory: 1Gi, limits.memory: 2Gi, pods: "10", requests.nvidia.com/gpu: "0"}
+---
+apiVersion: v1
+kind: LimitRange
+metadata: {name: defaults, namespace: dispute}
+spec:
+  limits: [{type: Container, defaultRequest: {cpu: 50m, memory: 64Mi}, default: {memory: 256Mi}}]
+---
+apiVersion: v1
+kind: LimitRange
+metadata: {name: defaults, namespace: mlops}
+spec:
+  limits: [{type: Container, defaultRequest: {cpu: 50m, memory: 64Mi}, default: {memory: 256Mi}}]
+---
+apiVersion: v1
+kind: LimitRange
+metadata: {name: defaults, namespace: team-fraud}
+spec:
+  limits: [{type: Container, defaultRequest: {cpu: 50m, memory: 64Mi}, default: {memory: 256Mi}}]

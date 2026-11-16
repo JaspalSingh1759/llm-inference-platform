@@ -155,9 +155,9 @@ steps = [
     {"title": "P1 Local LLM", "lines": ["kind + llama.cpp + app"], "color": "blue"},
     {"title": "P2 Training", "lines": ["Argo, MLflow, gate"], "color": "blue"},
     {"title": "P3 Eval + traces", "lines": ["golden set, gate, OTel"], "color": "blue"},
-    {"title": "P4 Terraform", "lines": ["VPC, EKS, node groups"], "color": "purple", "bold": True},
+    {"title": "P4 Terraform", "lines": ["VPC, EKS, node groups"], "color": "purple"},
     {"title": "P5 LLM serving", "lines": ["KServe · CPU → GPU"], "color": "purple"},
-    {"title": "P6 Gateway", "lines": ["LiteLLM, guardrails"], "color": "purple"},
+    {"title": "P6 Gateway", "lines": ["LiteLLM, guardrails"], "color": "purple", "bold": True},
     {"title": "P7 CI/CD", "lines": ["eval gate → GitOps"], "color": "green"},
     {"title": "P8 Observe", "lines": ["TTFT, GPU, tokens"], "color": "green"},
     {"title": "P9 Scale + cost", "lines": ["KEDA, Karpenter, k6"], "color": "green"},
@@ -294,3 +294,111 @@ s.text(510, 175 + 95, "step 5: delete the preview namespace (production was neve
 s.box(220, 430, 760, 70, "Our laptop version: make eval PROMPT=x",
       ["same steps by hand: helm upgrade with the candidate → run_eval.py → exit 0/1 → trap puts v1 back"], "gray", dashed=True)
 s.save("candidate-in-ci.svg")
+
+
+# 7. P4 platform on AWS ---------------------------------------------------------------------------
+s = Svg(1240, 920, "P4: what one terraform apply builds on AWS",
+        "Built at the start of a session (make eks-up), destroyed at the end (make eks-down). Only the P0 bootstrap stays")
+s.box(24, 110, 180, 110, "Your laptop", ["make eks-up / eks-down", "terraform + kubectl", "(kubectl → API)"], "gray")
+s.box(24, 610, 180, 130, "P0 bootstrap", ["(never destroyed)", "Terraform state bucket", "budget alert $20 / $50", "GitHub OIDC role"], "gray", dashed=True)
+s.arrow([(114, 220), (114, 608)], dashed=True, label="state: platform/", label_at=(62, 420), label_color=MUTED)
+s.group(224, 80, 992, 790, "AWS account · us-east-1")
+s.box(244, 115, 600, 95, "EKS control plane · Kubernetes 1.36 (run by AWS, $0.10/h)",
+      ["API server: only your IP may connect · access entries", "Secrets encrypted with the KMS key · audit logs → CloudWatch"], "purple", title_size=14)
+s.arrow([(204, 160), (242, 160)])
+s.group(244, 235, 620, 615, "VPC 10.20.0.0/16 · 2 availability zones")
+s.box(264, 275, 180, 70, "Public subnets", ["load balancers later (P5+)"], "gray", dashed=True, title_size=13)
+s.box(584, 275, 260, 70, "NAT gateway", ["private nodes → internet (image pulls)"], "gray", title_size=13)
+s.group(264, 370, 580, 465, "Private subnets (zones a + b): nodes and database, no public IPs")
+s.arrow([(500, 210), (500, 408)], label="runs the nodes", label_at=(500, 360), label_color=MUTED)
+s.box(284, 410, 260, 155, "system node group", ["2× t3.large · ON-DEMAND", "Argo CD", "CoreDNS, VPC CNI, EBS CSI,", "Pod Identity agent", "assistant + classifier (P5)"], "blue", bold_border=True)
+s.box(564, 410, 260, 155, "llm node group", ["1–2× c7i.large · SPOT (~70% off)", "taint workload=llm:NoSchedule", "only pods that tolerate it:", "the LLM server (P5)"], "purple", bold_border=True)
+s.arrow([(714, 408), (714, 347)], label="image pulls", label_at=(760, 385), label_color=MUTED)
+s.box(284, 590, 260, 110, "gpu node group (off)", ["g4dn.xlarge spot · 0 → 1 nodes", "taint nvidia.com/gpu", "gpu_enabled = false until quota"], "gray", dashed=True)
+s.box(564, 590, 260, 110, "RDS PostgreSQL 16", ["db.t4g.micro · MLflow's database", "port 5432 from nodes only", "encrypted, password in Secrets Mgr"], "teal")
+s.arrow([(694, 565), (694, 588)])
+s.text(554, 740, "VPC CNI: every pod gets a real VPC IP address, so the private subnets are big (/20 = 4,096 IPs each)", size=12, color=MUTED)
+s.text(554, 765, "One NAT gateway saves $0.045/h; production uses one per zone", size=12, color=MUTED)
+s.box(890, 250, 306, 100, "S3 buckets (versioned, KMS)", ["mlops: raw/, datasets/, mlflow/, argo/", "models: published models, llm/ weights"], "amber")
+s.box(890, 375, 306, 85, "ECR registries", ["assistant, classifier, trainer, mlflow", "immutable tags · scan on push"], "amber")
+s.box(890, 485, 306, 130, "IAM roles via Pod Identity", ["dispute/classifier → read models", "dispute/llm → read models/llm/", "mlops/trainer → write models", "mlops/mlflow → mlops/mlflow/  ·  no keys"], "red")
+s.box(890, 640, 306, 80, "KMS key (ours)", ["encrypts S3, Secrets, RDS, ECR"], "green")
+s.arrow([(844, 300), (888, 300)], label="S3", label_at=(866, 290), label_color=MUTED)
+s.arrow([(844, 417), (888, 417)], label="pull", label_at=(866, 407), label_color=MUTED)
+s.arrow([(824, 520), (888, 540)], label="role", label_at=(858, 518), label_color=MUTED)
+s.legend(30, 895, [("blue", "Always-on compute (on-demand)"), ("purple", "Spot / AWS-managed"), ("amber", "Storage + images"), ("red", "Access (IAM)")])
+s.save("p4-platform.svg")
+
+
+# 8. P4 taints and tolerations ---------------------------------------------------------------------
+s = Svg(1240, 470, "Where pods land: labels invite, taints repel",
+        "nodeSelector = \"only run me on nodes with this label\" · taint = \"stay away unless you tolerate me\" (make eks-check)")
+pods = [("wants-llm-node", ["nodeSelector node-role=llm", "toleration workload=llm"], "green"),
+        ("ordinary", ["no nodeSelector", "no toleration"], "blue"),
+        ("no-toleration", ["nodeSelector node-role=llm", "no toleration"], "red")]
+for i, (title, lines, color) in enumerate(pods):
+    s.box(40, 100 + i * 115, 280, 90, title, lines, color)
+s.box(560, 90, 300, 110, "llm node", ["label node-role=llm", "TAINT workload=llm:NoSchedule", "spot c7i.large"], "purple", bold_border=True)
+s.box(560, 225, 300, 90, "system nodes", ["label node-role=system", "no taint · on-demand t3.large"], "blue")
+s.box(560, 340, 300, 90, "Pending (not scheduled)", ["no node is both labelled llm", "and willing to accept it"], "red", dashed=True)
+s.arrow([(320, 145), (558, 145)], label="label matches + taint tolerated", label_at=(440, 135), label_color=C["green"][1])
+s.arrow([(320, 260), (558, 270)], label="taint keeps it off the llm node", label_at=(440, 252), label_color=MUTED)
+s.arrow([(320, 375), (558, 385)], color=C["red"][1], label="wants llm, but the taint repels it", label_at=(440, 368))
+s.box(900, 120, 316, 280, "Why it matters", ["Expensive nodes (LLM, GPU) run only", "the workloads that need them.", "", "Without the taint, any pod could", "fill the GPU node and keep it", "alive (and billing) for nothing.", "", "Without the label, the LLM pod", "could land on a small system node."], "gray")
+s.save("p4-node-placement.svg")
+
+
+# 9. Environments in real projects ----------------------------------------------------------------
+s = Svg(1240, 700, "How real projects handle environments",
+        "Same code, different accounts and values. Each box with a dashed border is its own AWS account")
+s.box(24, 100, 260, 110, "Git: the same code for every env", ["terraform modules (versioned)", "Helm charts (versioned)", "app images (built once)"], "gray")
+for i, (env, color, note) in enumerate([("Dev account", "green", "anyone on the team can apply"),
+                                        ("Staging account", "amber", "a copy of prod, for final tests"),
+                                        ("Prod account", "red", "CI only, main branch + approval")]):
+    x = 330 + i * 300
+    s.group(x, 85, 280, 470, env)
+    s.text(x + 140, 125, note, size=12, color=MUTED)
+    s.box(x + 20, 140, 240, 60, "state bucket + CI role", ["bootstrap (created once)"], "gray", title_size=13)
+    for j, (stack, lines) in enumerate([("network", ["VPC, subnets, NAT"]), ("eks", ["cluster, node groups"]),
+                                        ("data", ["RDS, S3 (protected)"]), ("addons", ["Argo CD, monitoring"])]):
+        y = 220 + j * 78
+        s.box(x + 20, y, 240, 60, f"{stack} stack", [lines[0] + " · own state file"], color, title_size=13)
+        if j:
+            s.arrow([(x + 140, y - 18), (x + 140, y - 2)])
+s.arrow([(284, 155), (328, 155)])
+s.text(470, 590, "Each stack has its own state file: a bad apply on eks can't touch network or data.", size=13, color=INK, anchor="start")
+s.text(470, 614, "A stack reads the one above it through SSM parameters, data sources or terraform_remote_state.", size=13, color=INK, anchor="start")
+s.text(470, 638, "Dev credentials can't read or change anything in the prod account.", size=13, color=INK, anchor="start")
+s.box(24, 250, 260, 150, "Shared accounts", ["management: billing, org rules", "security: audit logs from all", "shared services: ECR, CI runners"], "blue")
+s.box(24, 440, 260, 115, "Promotion", ["the same image and module", "version moves dev → staging", "→ prod, after checks pass"], "purple")
+s.save("environments.svg")
+
+
+# 10. P5 on EKS: what runs where -----------------------------------------------------------------
+s = Svg(1240, 760, "P5: serving and training on EKS, and what runs where",
+        "Node groups by kind of work, namespaces by team, priorities decide who wins when the cluster is full")
+cols = [("system nodes · 2× t3.large on-demand", "blue", 24, 400,
+         [("assistant", "dispute · Helm chart · serving"), ("classifier (KServe)", "dispute · v2 from S3 · serving"),
+          ("MLflow", "mlops · DB on RDS · serving"), ("Argo CD, Argo Workflows,", "KServe, cert-manager, add-ons")]),
+        ("llm node · spot c5.large (11 types)", "purple", 444, 360,
+         [("LLM (KServe)", "dispute · llama.cpp · Qwen 0.5B"), ("taint workload=llm", "only the LLM tolerates it"),
+          ("Recreate strategy", "one replica fills the node")]),
+        ("training node · spot m5.large (11 types)", "amber", 824, 392,
+         [("pipeline step pods", "mlops · Argo · priority training"), ("taint workload=training", "only pipeline pods"),
+          ("preempted by serving", "when serving needs the room")])]
+for title, color, x, w, items in cols:
+    s.group(x, 85, w, 330, title)
+    for i, (t, line) in enumerate(items):
+        s.box(x + 20, 120 + i * 72, w - 40, 60, t, [line], color, title_size=13)
+s.box(24, 450, 300, 110, "S3 models bucket", ["dispute-classifier/v1, v2", "(published by the EKS pipeline)", "llm/…/model.gguf"], "teal")
+s.box(350, 450, 300, 110, "KServe storage initializer", ["init container: downloads", "STORAGE_URI → /mnt/models", "with Pod Identity (no keys)"], "gray")
+s.box(676, 450, 270, 110, "S3 mlops bucket", ["raw/, datasets/,", "mlflow/, argo/"], "teal")
+s.box(972, 450, 244, 110, "RDS PostgreSQL", ["MLflow's database", "(MLflow: system nodes)", "password from Secrets Mgr"], "teal")
+s.arrow([(324, 505), (348, 505)])
+s.arrow([(500, 450), (500, 416)], label="before the model server starts", label_at=(600, 436), label_color=MUTED)
+s.arrow([(1020, 416), (811, 448)], dashed=True)
+s.group(24, 590, 1192, 130, "Teams (namespaces) · quotas · priorities")
+s.box(44, 625, 360, 80, "disputes team", ["dispute: CPU 3, memory 3Gi", "mlops: CPU 2, memory 4Gi"], "green", title_size=13)
+s.box(430, 625, 360, 80, "team-fraud (example 2nd team)", ["CPU 500m, memory 1Gi, GPU 0", "shared pipeline template, no S3 role yet"], "gray", title_size=13)
+s.box(816, 625, 380, 80, "PriorityClasses", ["serving 100000: may preempt training", "training 1000: never preempts, retried"], "red", title_size=13)
+s.save("p5-eks.svg")

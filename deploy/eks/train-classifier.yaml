@@ -1,0 +1,130 @@
+# P5: the P2 training pipeline on EKS, as a ClusterWorkflowTemplate: one shared definition that any team's
+# namespace can run with its own parameters (P5 part 3). Same steps and code as on kind (training/workflow.yaml);
+# what differs: images from ECR, real S3 through Pod Identity (no keys), pods on the spot training nodes, low priority.
+#
+# Run it:  NAMESPACE=mlops CLUSTER_TEMPLATE=true training/scripts/train.sh claims-2026-11.csv   (make eks-train)
+apiVersion: argoproj.io/v1alpha1
+kind: ClusterWorkflowTemplate
+metadata:
+  name: train-classifier
+spec:
+  serviceAccountName: trainer      # in each team namespace; Pod Identity maps it to that team's IAM role
+  # Spot training nodes only; serving pods may preempt these (priority), and Argo retries interrupted steps.
+  nodeSelector: {node-role: training}
+  tolerations:
+    - {key: workload, operator: Equal, value: training, effect: NoSchedule}
+  podPriorityClassName: training
+  entrypoint: pipeline
+  arguments:
+    parameters:
+      - name: raw                       # file under raw/ in the store, e.g. claims-2026-11.csv
+      - name: eval-raw                  # shared evaluation set for comparing models trained on different data
+        value: golden-2026.csv
+      - name: model-name                # another team could reuse this template for its own model
+        value: dispute-classifier
+  ttlStrategy:
+    secondsAfterCompletion: 172800      # keep finished runs (and their pods' logs) for 2 days
+  securityContext: {runAsNonRoot: true, runAsUser: 10001, fsGroup: 10001}
+  volumes:
+    - {name: work, emptyDir: {}}
+    - {name: tmp, emptyDir: {}}
+
+  # Settings shared by every step's container.
+  # Shared step settings, written once (&trainer) and merged into every step (<<: *trainer). templateDefaults
+  # alone isn't applied when a run refers to a ClusterWorkflowTemplate (found on the first EKS run).
+  templateDefaults:
+    container: &trainer
+      image: 352184619391.dkr.ecr.us-east-1.amazonaws.com/llm-platform/trainer:fe78dd5
+      imagePullPolicy: IfNotPresent
+      env:
+        - {name: MODEL_NAME, value: "{{workflow.parameters.model-name}}"}
+        - {name: MLFLOW_TRACKING_URI, value: "http://mlflow.mlops:5000"}
+        - {name: S3_ENDPOINT_URL, value: ""}                  # empty = real S3
+        - {name: MLOPS_BUCKET, value: llm-platform-mlops-352184619391}
+        - {name: MODELS_BUCKET, value: llm-platform-models-352184619391}
+        - {name: AWS_DEFAULT_REGION, value: us-east-1}
+        # No keys: Pod Identity gives the trainer service account short-lived credentials.
+      resources:
+        requests: {cpu: 250m, memory: 512Mi}
+        limits: {memory: 1536Mi}
+      securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+      volumeMounts:
+        - {name: work, mountPath: /work}
+        - {name: tmp, mountPath: /tmp}
+
+  templates:
+    - name: pipeline
+      steps:
+        - - name: prepare
+            template: prepare
+        - - name: validate
+            template: validate
+            arguments:
+              parameters: [{name: dataset, value: "{{steps.prepare.outputs.parameters.dataset}}"}]
+        - - name: train
+            template: train
+            arguments:
+              parameters: [{name: dataset, value: "{{steps.prepare.outputs.parameters.dataset}}"}]
+        - - name: compare
+            template: compare
+            arguments:
+              parameters: [{name: version, value: "{{steps.train.outputs.parameters.version}}"}]
+        - - name: publish
+            template: publish
+            when: "{{steps.compare.outputs.parameters.promoted}} == true"   # skipped when there's nothing new
+            arguments:
+              parameters: [{name: version, value: "{{steps.train.outputs.parameters.version}}"}]
+              artifacts: [{name: package, from: "{{steps.train.outputs.artifacts.package}}"}]
+
+    - name: prepare
+      container:
+        <<: *trainer
+        command: [python, prepare.py, --raw, "raw/{{workflow.parameters.raw}}", --version-file, /work/dataset-version]
+      outputs:
+        parameters: [{name: dataset, valueFrom: {path: /work/dataset-version}}]
+
+    - name: validate
+      inputs:
+        parameters: [{name: dataset}]
+      container:
+        <<: *trainer
+        command: [python, validate.py, "{{inputs.parameters.dataset}}"]
+
+    - name: train
+      inputs:
+        parameters: [{name: dataset}]
+      # Retry what an interruption looks like: a system error (pod lost, node gone) or a killed process
+      # (exit 137: SIGKILL, e.g. a spot node shutting down or an out-of-memory kill). A failed gate exits 1
+      # and is never retried: running it again would give the same answer.
+      retryStrategy:
+        limit: 2
+        retryPolicy: Always
+        expression: 'lastRetry.status == "Error" || lastRetry.exitCode == "137"'
+        backoff: {duration: 5s}
+      container:
+        <<: *trainer
+        command: [python, train.py, --data, "{{inputs.parameters.dataset}}", --out, /work/out]
+        resources:
+          requests: {cpu: "1", memory: 1Gi}
+          limits: {memory: 3Gi}
+      outputs:
+        parameters: [{name: version, valueFrom: {path: /work/out/registry_version}}]
+        artifacts: [{name: package, path: /work/out}]   # model.joblib + metadata.json, handed to publish
+
+    - name: compare
+      inputs:
+        parameters: [{name: version}]
+      container:
+        <<: *trainer
+        command: [python, compare.py, --version, "{{inputs.parameters.version}}", --eval-raw, "raw/{{workflow.parameters.eval-raw}}",
+                  --result, /work/promoted]
+      outputs:
+        parameters: [{name: promoted, valueFrom: {path: /work/promoted}}]
+
+    - name: publish
+      inputs:
+        parameters: [{name: version}]
+        artifacts: [{name: package, path: /work/package}]
+      container:
+        <<: *trainer
+        command: [python, publish.py, /work/package, --version, "{{inputs.parameters.version}}"]
